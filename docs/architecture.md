@@ -10,44 +10,49 @@ rebuilding the Teams client.
 ## Runtime sequence
 
 1. Teams loads the personal tab from Azure App Service.
-2. The client initializes Teams JS and reads the Teams user's login hint.
-3. MSAL signs in the existing work user through a dedicated blank callback.
-4. The client obtains a delegated Graph token and reads catalog columns/items.
-5. The user selects an agent.
-6. The client obtains a delegated Power Platform token and invokes that agent.
-7. The browser requests a short-lived Speech token from the same-origin broker.
-8. App Service resolves the Speech key from Key Vault with managed identity.
-9. Speech runs STT/TTS and, when enabled, establishes avatar WebRTC media.
+2. The client initializes Teams JS and reads the Teams user's account context.
+3. MSAL nested app authentication obtains the Teams user's token silently, or
+   shows a one-time Copilot Studio consent dialog when required.
+4. The client asks App Service for the catalog.
+5. App Service calls the signed Power Automate HTTP trigger from Key Vault.
+6. The flow reads SharePoint using its maker-owned connector connection.
+7. The user selects an agent.
+8. The client obtains a delegated Power Platform token and invokes that agent.
+9. The browser requests a short-lived Speech token from the same-origin broker.
+10. App Service resolves the Speech key from Key Vault with managed identity.
+11. Speech runs STT/TTS and, when enabled, establishes avatar WebRTC media.
 
 ## Why an Entra app registration is required
 
 The registration identifies the application, not the person. It declares:
 
 - the customer tenant;
-- `/auth/callback` as the SPA callback;
-- Microsoft Graph `Sites.Read.All`; and
+- `brk-multihub://<deployed-domain>` for Teams nested app authentication;
+- `/auth/callback` for browser diagnostics;
 - Power Platform `CopilotStudio.Copilots.Invoke`.
 
 Every user still authenticates as themselves. Their effective access is the
-intersection of tenant consent, SharePoint access, and Copilot Studio sharing.
+intersection of tenant consent and Copilot Studio sharing.
 
 ## Authentication UX
 
-Graph and Power Platform issue different audience tokens. The app cannot request
-both resources in one OAuth token. It signs in with the Graph scope first so it
-can load the catalog, then requests the selected agent's Power Platform scope.
-With admin pre-consent, later token acquisition is silent. Without pre-consent,
-first use can show separate consent interactions.
+The catalog does not require a user Graph token. Power Automate uses the flow
+maker's SharePoint connection and App Service keeps the signed trigger URL in
+Key Vault. If the flow is unavailable, the default agent remains usable.
 
-The callback page does not render React or an agent. This prevents nested copies
-of the app inside authentication windows.
+Teams NAA uses the identity already active in Teams, avoiding a separate account
+login. If tenant policy permits user consent, the first connection can request
+the Copilot Studio permission once. Later token acquisition is silent. The
+browser-only callback page does not render React or an agent.
 
 ## Trust boundaries
 
 - Browser tokens remain in MSAL session storage.
 - Speech subscription key remains in Key Vault.
+- Power Automate signed trigger URL remains in Key Vault.
 - App Service receives the Speech key as a Key Vault reference.
 - Browser Speech credentials are short-lived.
+- The catalog connection is owned by Power Automate, not the browser.
 - The Outlook connection is owned by Copilot Studio/Power Platform, not this
   web app.
 - The app does not intentionally store messages or generated email HTML.
@@ -57,3 +62,9 @@ of the app inside authentication windows.
 The Speech token route has basic IP-based in-memory rate limiting but no bearer
 token validation. Treat the deployment as a controlled POC. Add backend token
 validation and distributed throttling before broader production use.
+
+When `DEMO_MODE=true`, Pat and Morgan run deterministic client-side tools so the
+demo remains available without Copilot consent. Morgan's session data mirrors
+the SharePoint **Voice Agent Orders** list, but session changes are not
+persisted. Pat can open a self-addressed Outlook draft but cannot silently send
+it because the sample deliberately stores no user or Outlook credential.

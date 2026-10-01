@@ -24,10 +24,12 @@ Complete all of these surfaces:
 3. A published agent shared with the intended testers.
 4. A SharePoint/Microsoft List catalog containing the agent's voice and avatar
    identity.
-5. A single-tenant Entra SPA and tenant-specific Teams personal app.
-6. Azure App Service, Speech S0, Key Vault, Application Insights, and Log
+5. A maker-owned Power Automate bridge that reads the catalog without delegated
+   Graph permission for app users.
+6. A single-tenant Entra SPA and tenant-specific Teams personal app.
+7. Azure App Service, Speech S0, Key Vault, Application Insights, and Log
    Analytics resources.
-7. A deployed and verified application and an installable Teams package.
+8. A deployed and verified application and an installable Teams package.
 
 The Teams component is a personal tab that calls the Copilot Studio agent. Do
 not describe or provision a separate Bot Framework bot unless the repository
@@ -42,7 +44,9 @@ architecture has intentionally changed.
   IDs in ignored local files only.
 - Never place customer-specific values in tracked examples, documentation,
   screenshots, or the generic catalog CSV.
-- Use delegated user authentication for Copilot Studio and SharePoint.
+- Use Teams nested app authentication for delegated Copilot Studio access.
+- Use the maker-owned Power Automate SharePoint connection for catalog access;
+  do not request delegated Graph SharePoint permissions from app users.
 - Use the App Service managed identity and a Key Vault reference for the Speech
   key.
 - Do not log interview answers, generated email HTML, access tokens, or Speech
@@ -100,7 +104,9 @@ Collect or discover these values:
 - SharePoint hostname.
 - Server-relative site path.
 - Catalog list display name.
-- Catalog editors and readers.
+- Catalog editors.
+- Flow maker account and SharePoint connector connection.
+- Power Automate Request trigger licensing and DLP approval.
 
 ### Speech identity
 
@@ -210,14 +216,18 @@ are:
 - `AvatarStyle`
 
 Do not assume SharePoint internal field names equal display names. CSV import
-can produce names such as `field_1`; resolve fields by display name through
-Microsoft Graph or SharePoint REST.
+can produce names such as `field_1`; map Power Automate **Select** keys with the
+SharePoint dynamic-content labels.
 
 Create or update one enabled row for the published agent. Apply the selected
-locale, voice, avatar character, and avatar style. Grant testers read access and
-catalog maintainers edit access.
+locale, voice, avatar character, and avatar style. Grant the flow maker read
+access and catalog maintainers edit access.
 
 Read the row back and verify all eleven fields before continuing.
+
+Create the maker-owned flow exactly as documented in
+`catalog/power-automate-flow.md`. Save it, copy the signed trigger URL, and test
+that it returns an `agents` array. Treat the URL as a secret.
 
 ## Phase 5: Local environment
 
@@ -232,10 +242,27 @@ AZURE_LOCATION=<validated-region>
 RESOURCE_SUFFIX=<unique-suffix>
 COPILOT_ENVIRONMENT_ID=<published-environment-guid>
 COPILOT_SCHEMA_NAME=<published-schema-name>
-SHAREPOINT_CATALOG_HOSTNAME=<tenant>.sharepoint.com
-SHAREPOINT_CATALOG_SITE_PATH=/sites/<site>
-SHAREPOINT_CATALOG_LIST_NAME=<list-name>
 ```
+
+Copy `env/.env.dev.user.example` to the matching ignored user file and set:
+
+```dotenv
+CATALOG_FLOW_URL=<signed-power-automate-trigger-url>
+DEMO_MODE=false
+```
+
+Use `CATALOG_FLOW_URL=disabled` only for a staged deployment before the flow
+exists. The configured default agent remains available, but `/api/catalog`
+stays disabled until the signed URL is supplied and provisioning is rerun.
+
+For a time-critical POC when delegated consent is blocked, set
+`DEMO_MODE=true`. This runs the local four-question Pat demonstration and the
+deterministic Morgan order tool with Speech/avatar but intentionally bypasses
+Copilot Studio. In Teams, Pat uses the current user's login hint to open a
+self-addressed Outlook draft; the user must select **Send**. The UI and final
+summary must clearly identify those limitations. Set demo mode back to `false`
+before verifying real agent invocation, SharePoint persistence, or automatic
+Outlook delivery.
 
 Leave generated Entra, Teams, endpoint, and resource ID values empty before the
 first provision. Confirm the environment file is ignored by Git.
@@ -289,12 +316,16 @@ revalidate instead of silently changing the architecture.
 Verify the Entra SPA has:
 
 - Power Platform `CopilotStudio.Copilots.Invoke`;
-- Microsoft Graph delegated `Sites.Read.All`;
+- `brk-multihub://<deployed-domain>` as a SPA redirect for Teams NAA;
 - the deployed `/auth/callback` SPA redirect URI; and
 - single-tenant sign-in.
 
-Grant tenant admin consent only when customer policy requires it. Never claim
-consent succeeded without checking the service principal.
+The Teams client must initialize Teams JS before MSAL and use nested app
+authentication. Verify silent token acquisition first. If user consent is
+allowed, first use can show a one-time Copilot Studio permission dialog without
+a separate account login. Grant tenant admin consent only when customer policy
+blocks user consent. Never claim consent succeeded without verifying the token
+or service principal.
 
 Build and validate the Teams package with Agents Toolkit. Install the generated
 tenant-specific ZIP for the deployment owner, then share or assign it to the
@@ -306,20 +337,31 @@ Verify all of these:
 
 1. `GET /api/health` returns `{"status":"ok"}`.
 2. `/tabs/home` returns HTTP 200 and the Content Security Policy header.
-3. `/api/config` contains the expected default agent and SharePoint catalog.
-4. Key Vault references resolve and no Speech key reaches the browser.
-5. The signed-in user can read the catalog through Microsoft Graph.
-6. Agent dropdown and catalog identity are correct.
-7. Typed conversation reaches the published agent.
-8. STT recognizes microphone input using the selected locale.
-9. Audio TTS uses the selected neural voice.
-10. Avatar mode uses the selected character/style, with audio-only fallback
+3. `/api/config` contains the expected default agent and catalog-enabled state.
+   If demo mode is selected, also verify `demoMode: true`.
+4. Key Vault references resolve and neither secret reaches the browser.
+5. `/api/catalog` returns the maker-owned flow's normalized `agents` array.
+   If `CATALOG_FLOW_URL=disabled`, verify it returns 404 and the default agent
+   remains available instead.
+6. Teams uses the current work identity without a separate login prompt.
+7. First-use consent, if required, returns to the app without a nested app
+   window; subsequent token acquisition is silent.
+8. Agent dropdown and catalog identity are correct.
+9. Typed conversation reaches the published agent, or completes the clearly
+   labeled local four-question flow when `DEMO_MODE=true`.
+10. STT recognizes microphone input using the selected locale.
+    Verify managed voice mode starts with one action, submits after end-of-turn
+    silence, pauses while the agent speaks, reopens automatically afterward,
+    and stops when **Stop conversation** is selected.
+11. Audio TTS uses the selected neural voice.
+12. Avatar mode uses the selected character/style, with audio-only fallback
     when relay credentials are unavailable.
-11. Completing the interview sends exactly one HTML email.
-12. The UI displays the selected agent's configured completion phrase.
-13. Application Insights contains health and failure telemetry but no transcript
+13. Completing the real-agent interview sends exactly one HTML email. In demo
+    mode, verify that the UI explicitly says email was not sent.
+14. The UI displays the selected agent's configured completion phrase.
+15. Application Insights contains health and failure telemetry but no transcript
     or generated HTML content.
-14. Managed-identity Key Vault access is present in live Azure state.
+16. Managed-identity Key Vault access is present in live Azure state.
 
 If any check fails, fix the root cause and repeat the smallest relevant
 provision, deploy, or verification step.

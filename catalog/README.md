@@ -31,8 +31,10 @@ configured.
 7. Give catalog editors **Edit** access to the list.
 8. Give app users **Read** access to the list and permission to use every agent
    you enable.
-9. Configure the SharePoint values in `env/.env.dev`.
-10. Provision or update the app registration and deploy the app.
+9. Create the maker-owned connector bridge in
+   [`power-automate-flow.md`](power-automate-flow.md).
+10. Store its signed trigger URL in ignored `env/.env.dev.user`.
+11. Provision and deploy the app.
 
 ## Add an agent
 
@@ -54,15 +56,23 @@ Create a new list row:
 The app reads the list each time a user connects. Adding, disabling, or editing
 an agent does not require rebuilding or reinstalling the Teams app.
 
-## Authentication
+## Order-management demo list
 
-The app requests delegated Microsoft Graph `Sites.Read.All`. Each user signs in
-with their own Microsoft identity, and their effective access is limited by
-both the consented permission and their SharePoint permissions. No owner's
-password or refresh token is stored.
+`Voice Agent Orders.csv` defines the sample data used by Morgan. Import it into
+the same SharePoint site as a list named **Voice Agent Orders**. The no-login
+demo uses a deterministic in-session mirror of these rows, so it does not
+depend on delegated SharePoint consent. For production, replace that demo tool
+with a maker-owned Power Automate SharePoint connector action.
 
-The delegated Graph permission can be user-consented when tenant policy permits;
-otherwise a tenant administrator must grant one-time consent.
+## Connector and access model
+
+The app does not request Microsoft Graph SharePoint permissions. App Service
+calls a signed Power Automate HTTP trigger, and the flow reads the list with the
+maker-owned SharePoint connector connection.
+
+The signed trigger URL is stored in Key Vault and never returned to the browser.
+Do not put credentials or secrets in catalog rows. Every authorized app user can
+receive the enabled-agent metadata returned by the flow.
 
 ## Validation
 

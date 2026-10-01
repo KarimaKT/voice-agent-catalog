@@ -10,19 +10,16 @@ export interface AgentDefinition {
   voiceName: string;
   avatarCharacter: string;
   avatarStyle: string;
-}
-
-export interface SharePointCatalogConfig {
-  hostname: string;
-  sitePath: string;
-  listName: string;
+  demoKind?: "interview" | "orders";
 }
 
 export interface AppConfig {
   tenantId: string;
   clientId: string;
   defaultAgent: AgentDefinition;
-  sharePointCatalog?: SharePointCatalogConfig;
+  catalogEnabled: boolean;
+  demoMode: boolean;
+  demoAgents?: AgentDefinition[];
 }
 
 export interface SpeechCredentials {

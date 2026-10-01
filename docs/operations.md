@@ -29,9 +29,17 @@ contain the Speech key.
 
 ## Authentication troubleshooting
 
+### Teams asks for a separate account login
+
+Teams should use nested app authentication instead. Confirm the Entra SPA has
+`brk-multihub://<app-domain>`, re-run provisioning, and use a current Teams
+desktop or web client. Older clients that do not support NAA are rejected rather
+than opening a nested login popup.
+
 ### Authentication window shows another copy of the app
 
-The Entra SPA callback is wrong or stale. It must be:
+This browser-diagnostics fallback indicates that the Entra SPA callback is
+wrong or stale. It must be:
 
 ```text
 https://<app>.azurewebsites.net/auth/callback
@@ -39,11 +47,16 @@ https://<app>.azurewebsites.net/auth/callback
 
 Re-run provisioning after updating `aad.manifest.json`.
 
-### More than one first-use consent window
+### Need admin approval
 
-Expected when Graph and Power Platform have not been pre-consented. They are
-different token resources. An administrator can pre-consent both delegated
-permissions.
+The generic app requests only `CopilotStudio.Copilots.Invoke`. If tenant policy
+blocks user consent, ask an administrator to consent that delegated permission.
+SharePoint catalog access uses the maker-owned flow and does not request Graph
+consent from app users.
+
+If user consent is allowed, accept the one-time Copilot Studio permission
+dialog. Choosing **Return to app without granting permission** cancels the
+connection; it cannot authorize the agent.
 
 ### Wrong account
 
@@ -53,8 +66,11 @@ before starting authentication.
 
 ## Catalog troubleshooting
 
-- Confirm the user has SharePoint read access.
-- Confirm Graph consent.
+- Confirm the flow maker's SharePoint connection is healthy.
+- Confirm `CATALOG_FLOW_URL` resolves from Key Vault.
+- If the flow is intentionally not ready, set `CATALOG_FLOW_URL=disabled`,
+  provision again, and use the configured default agent.
+- POST the test request in `catalog/power-automate-flow.md`.
 - Confirm required display-name columns exist.
 - Do not assume CSV-imported internal field names; the app resolves columns by
   display name.

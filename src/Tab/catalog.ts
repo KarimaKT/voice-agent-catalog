@@ -1,79 +1,14 @@
-import { MicrosoftIdentity } from "./copilot";
 import type { AgentDefinition, AppConfig } from "./types";
 
-interface GraphSite {
-  id?: string;
+type CatalogAgentRecord = Record<string, unknown>;
+
+interface CatalogResponse {
+  agents?: CatalogAgentRecord[];
 }
 
-interface GraphList {
-  id?: string;
-  displayName?: string;
-}
-
-interface GraphListResponse {
-  value?: GraphList[];
-}
-
-type AgentFields = Record<string, unknown>;
-
-interface GraphColumn {
-  name?: string;
-  displayName?: string;
-}
-
-interface GraphColumnsResponse {
-  value?: GraphColumn[];
-}
-
-interface AgentColumnNames {
-  Title: string;
-  Description: string;
-  EnvironmentId: string;
-  SchemaName: string;
-  Enabled: string;
-  CompletionPhrase: string;
-  WelcomeMessage: string;
-  Locale: string;
-  VoiceName: string;
-  AvatarCharacter: string;
-  AvatarStyle: string;
-}
-
-interface GraphListItem {
-  id?: string;
-  fields?: AgentFields;
-}
-
-interface GraphItemsResponse {
-  value?: GraphListItem[];
-  "@odata.nextLink"?: string;
-}
-
-const graphRoot = "https://graph.microsoft.com/v1.0";
-const graphScopes = ["https://graph.microsoft.com/Sites.Read.All"];
 const environmentIdPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const schemaNamePattern = /^[A-Za-z][A-Za-z0-9_.-]{0,199}$/;
-
-async function graphGet<T>(url: string, token: string): Promise<T> {
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/json",
-    },
-  });
-
-  if (!response.ok) {
-    const requestId = response.headers.get("request-id");
-    throw new Error(
-      `Microsoft Graph request failed (${response.status})${
-        requestId ? `, request ${requestId}` : ""
-      }. Check SharePoint access and Graph consent.`,
-    );
-  }
-
-  return (await response.json()) as T;
-}
 
 function requiredString(value: unknown, field: string, itemId: string): string {
   if (typeof value !== "string" || !value.trim()) {
@@ -90,62 +25,18 @@ function isEnabled(value: unknown): boolean {
   return value === true || value === 1 || value === "1" || value === "true";
 }
 
-function resolveColumns(columns: GraphColumn[]): AgentColumnNames {
-  const byDisplayName = new Map(
-    columns
-      .filter((column) => column.name && column.displayName)
-      .map((column) => [column.displayName, column.name] as const),
-  );
-  const required = [
-    "Title",
-    "Description",
-    "EnvironmentId",
-    "SchemaName",
-    "Enabled",
-    "CompletionPhrase",
-    "WelcomeMessage",
-    "Locale",
-    "VoiceName",
-    "AvatarCharacter",
-    "AvatarStyle",
-  ] as const;
-  const missing = required.filter((name) => !byDisplayName.get(name));
-  if (missing.length > 0) {
-    throw new Error(`Agent catalog is missing columns: ${missing.join(", ")}.`);
-  }
-
-  return {
-    Title: byDisplayName.get("Title")!,
-    Description: byDisplayName.get("Description")!,
-    EnvironmentId: byDisplayName.get("EnvironmentId")!,
-    SchemaName: byDisplayName.get("SchemaName")!,
-    Enabled: byDisplayName.get("Enabled")!,
-    CompletionPhrase: byDisplayName.get("CompletionPhrase")!,
-    WelcomeMessage: byDisplayName.get("WelcomeMessage")!,
-    Locale: byDisplayName.get("Locale")!,
-    VoiceName: byDisplayName.get("VoiceName")!,
-    AvatarCharacter: byDisplayName.get("AvatarCharacter")!,
-    AvatarStyle: byDisplayName.get("AvatarStyle")!,
-  };
-}
-
 function mapAgent(
-  item: GraphListItem,
-  columns: AgentColumnNames,
+  record: CatalogAgentRecord,
+  index: number,
   defaults: AgentDefinition,
 ): AgentDefinition | undefined {
-  const itemId = item.id || "unknown";
-  const fields = item.fields;
-  if (!fields || !isEnabled(fields[columns.Enabled])) {
+  const itemId = optionalString(record.Id) || optionalString(record.id) || String(index + 1);
+  if (!isEnabled(record.Enabled)) {
     return undefined;
   }
 
-  const environmentId = requiredString(
-    fields[columns.EnvironmentId],
-    "EnvironmentId",
-    itemId,
-  );
-  const schemaName = requiredString(fields[columns.SchemaName], "SchemaName", itemId);
+  const environmentId = requiredString(record.EnvironmentId, "EnvironmentId", itemId);
+  const schemaName = requiredString(record.SchemaName, "SchemaName", itemId);
   if (!environmentIdPattern.test(environmentId)) {
     throw new Error(`Catalog item ${itemId} has an invalid EnvironmentId.`);
   }
@@ -155,84 +46,51 @@ function mapAgent(
 
   return {
     id: itemId,
-    displayName: requiredString(fields[columns.Title], "Title", itemId),
-    description: optionalString(fields[columns.Description]),
+    displayName: requiredString(record.Title, "Title", itemId),
+    description: optionalString(record.Description),
     environmentId,
     schemaName,
     completionPhrase:
-      optionalString(fields[columns.CompletionPhrase]) || defaults.completionPhrase,
-    welcomeMessage:
-      optionalString(fields[columns.WelcomeMessage]) || defaults.welcomeMessage,
-    locale: requiredString(fields[columns.Locale], "Locale", itemId),
-    voiceName: requiredString(fields[columns.VoiceName], "VoiceName", itemId),
+      optionalString(record.CompletionPhrase) || defaults.completionPhrase,
+    welcomeMessage: optionalString(record.WelcomeMessage) || defaults.welcomeMessage,
+    locale: requiredString(record.Locale, "Locale", itemId),
+    voiceName: requiredString(record.VoiceName, "VoiceName", itemId),
     avatarCharacter: requiredString(
-      fields[columns.AvatarCharacter],
+      record.AvatarCharacter,
       "AvatarCharacter",
       itemId,
     ),
-    avatarStyle: requiredString(fields[columns.AvatarStyle], "AvatarStyle", itemId),
+    avatarStyle: requiredString(record.AvatarStyle, "AvatarStyle", itemId),
   };
 }
 
-export async function loadAgentCatalog(
-  config: AppConfig,
-  identity: MicrosoftIdentity,
-): Promise<AgentDefinition[]> {
-  if (!config.sharePointCatalog) {
+export async function loadAgentCatalog(config: AppConfig): Promise<AgentDefinition[]> {
+  if (!config.catalogEnabled) {
     return [config.defaultAgent];
   }
 
-  const token = await identity.acquireToken(graphScopes);
-  const { hostname, sitePath, listName } = config.sharePointCatalog;
-  const normalizedPath = `/${sitePath.replace(/^\/+|\/+$/g, "")}`;
-  const site = await graphGet<GraphSite>(
-    `${graphRoot}/sites/${encodeURIComponent(hostname)}:${normalizedPath}`,
-    token,
-  );
-  if (!site.id) {
-    throw new Error("Microsoft Graph did not return the configured SharePoint site.");
+  const response = await fetch("/api/catalog", {
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => undefined)) as
+      | { error?: string }
+      | undefined;
+    throw new Error(body?.error || `Catalog request failed (${response.status}).`);
   }
 
-  const escapedListName = listName.replace(/'/g, "''");
-  const lists = await graphGet<GraphListResponse>(
-    `${graphRoot}/sites/${encodeURIComponent(site.id)}/lists?$select=id,displayName&$filter=${encodeURIComponent(
-      `displayName eq '${escapedListName}'`,
-    )}`,
-    token,
-  );
-  const list = lists.value?.find((candidate) => candidate.displayName === listName);
-  if (!list?.id) {
-    throw new Error(`SharePoint list "${listName}" was not found.`);
+  const result = (await response.json()) as CatalogResponse;
+  if (!Array.isArray(result.agents)) {
+    throw new Error("Catalog flow returned an invalid response.");
   }
 
-  const columnResult = await graphGet<GraphColumnsResponse>(
-    `${graphRoot}/sites/${encodeURIComponent(site.id)}/lists/${encodeURIComponent(
-      list.id,
-    )}/columns?$select=name,displayName`,
-    token,
-  );
-  const columns = resolveColumns(columnResult.value || []);
-  const fieldSelection = Object.values(columns).join(",");
-  const agents: AgentDefinition[] = [];
-  let nextUrl: string | undefined =
-    `${graphRoot}/sites/${encodeURIComponent(site.id)}/lists/${encodeURIComponent(
-      list.id,
-    )}/items?$expand=fields($select=${fieldSelection})&$top=200`;
-
-  for (let page = 0; nextUrl && page < 5; page += 1) {
-    const result: GraphItemsResponse = await graphGet<GraphItemsResponse>(nextUrl, token);
-    for (const item of result.value || []) {
-      const agent = mapAgent(item, columns, config.defaultAgent);
-      if (agent) {
-        agents.push(agent);
-      }
-    }
-    nextUrl = result["@odata.nextLink"];
-  }
+  const agents = result.agents
+    .map((record, index) => mapAgent(record, index, config.defaultAgent))
+    .filter((agent): agent is AgentDefinition => Boolean(agent))
+    .sort((left, right) => left.displayName.localeCompare(right.displayName));
 
   if (agents.length === 0) {
-    throw new Error(`SharePoint list "${listName}" has no enabled agents.`);
+    throw new Error("Catalog flow returned no enabled agents.");
   }
-
-  return agents.sort((left, right) => left.displayName.localeCompare(right.displayName));
+  return agents;
 }

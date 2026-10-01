@@ -37,18 +37,24 @@ Create a Microsoft List from `catalog/Pat Agent Catalog.csv`. Replace placeholde
 agent identifiers and apply the selected voice/avatar values. Grant users read
 access and maintainers edit access.
 
-## 4. Configure local deployment values
+## 4. Create the connector bridge
+
+Follow `catalog/power-automate-flow.md`. Save the flow with the deployment
+owner's SharePoint connection and copy the signed HTTP trigger URL.
+
+## 5. Configure local deployment values
 
 Copy:
 
 ```powershell
 Copy-Item env\.env.dev.example env\.env.dev
+Copy-Item env\.env.dev.user.example env\.env.dev.user
 ```
 
 Set subscription, resource group, region, suffix, Copilot environment/schema,
-and SharePoint values. `env/.env.dev` is ignored by Git.
+and the signed flow URL. Both customer files are ignored by Git.
 
-## 5. Validate prerequisites
+## 6. Validate prerequisites
 
 ```powershell
 node --version
@@ -69,7 +75,7 @@ Confirm:
 - custom Teams app policy; and
 - Power Platform capacity.
 
-## 6. Authenticate
+## 7. Authenticate
 
 Before opening each login, tell the installer which account to select.
 
@@ -81,7 +87,7 @@ npx -y --package @microsoft/m365agentstoolkit-cli atk auth login m365
 
 Azure CLI and the two Agents Toolkit services have separate secure token caches.
 
-## 7. Provision and deploy
+## 8. Provision and deploy
 
 ```powershell
 npx -y --package @microsoft/m365agentstoolkit-cli atk provision `
@@ -94,16 +100,17 @@ npx -y --package @microsoft/m365agentstoolkit-cli atk deploy `
 If provisioning fails after app IDs were created, keep the generated values,
 fix the root cause, validate, and rerun. Provisioning is idempotent.
 
-## 8. Consent and sharing
+## 9. Consent and sharing
 
-The Entra app requests Graph `Sites.Read.All` and Power Platform
-`CopilotStudio.Copilots.Invoke`. Users can consent when tenant policy permits;
-otherwise an administrator must grant consent.
+The Entra app requests Power Platform `CopilotStudio.Copilots.Invoke`. Users can
+consent once when tenant policy permits; otherwise an administrator must grant
+consent. In Teams, MSAL nested app authentication reuses the current Teams work
+identity, so users do not complete a separate account login.
 
-Share every enabled agent and the SharePoint catalog with the intended Teams
-users.
+Share every enabled agent with the intended Teams users. The flow maker must
+retain read access to the SharePoint list.
 
-## 9. Install Teams package
+## 10. Install Teams package
 
 ```powershell
 npx -y --package @microsoft/m365agentstoolkit-cli atk install `
@@ -114,6 +121,6 @@ npx -y --package @microsoft/m365agentstoolkit-cli atk install `
 For wider controlled rollout, upload the ZIP in Teams Admin Center and use app
 permission/setup policies.
 
-## 10. Verify
+## 11. Verify
 
 Follow the verification list in the main README and `docs/operations.md`.

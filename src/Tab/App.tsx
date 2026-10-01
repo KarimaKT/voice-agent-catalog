@@ -2,7 +2,14 @@ import React from "react";
 import * as teamsJs from "@microsoft/teams-js";
 
 import { loadAgentCatalog } from "./catalog";
-import { CopilotAgentClient, MicrosoftIdentity, toSpokenText } from "./copilot";
+import {
+  CopilotAgentClient,
+  DemoAgentClient,
+  MicrosoftIdentity,
+  toSpokenText,
+  type AgentClient,
+  type TeamsIdentityContext,
+} from "./copilot";
 import { SpeechController } from "./speech";
 import type { AgentDefinition, AppConfig, ChatMessage, TurnState } from "./types";
 import "./App.css";
@@ -30,25 +37,46 @@ export default function App() {
   const [state, setState] = React.useState<TurnState>("connecting");
   const [status, setStatus] = React.useState("Preparing the app...");
   const [avatarEnabled, setAvatarEnabled] = React.useState(true);
+  const [avatarVisible, setAvatarVisible] = React.useState(false);
+  const [voiceConversationActive, setVoiceConversationActive] = React.useState(false);
   const [hostName, setHostName] = React.useState("browser");
   const [agents, setAgents] = React.useState<AgentDefinition[]>([]);
   const [selectedAgentId, setSelectedAgentId] = React.useState("");
+  const [emailDraftUrl, setEmailDraftUrl] = React.useState("");
   const videoRef = React.useRef<HTMLVideoElement>(null);
   const configRef = React.useRef<AppConfig>();
+  const demoEmailRecipientRef = React.useRef<string>();
   const identityRef = React.useRef<MicrosoftIdentity>();
-  const agentClientRef = React.useRef<CopilotAgentClient>();
+  const agentClientRef = React.useRef<AgentClient>();
   const speechRef = React.useRef<SpeechController>();
   const transcriptRef = React.useRef<HTMLDivElement>(null);
+  const voiceConversationActiveRef = React.useRef(false);
+  const autoSubmitTimerRef = React.useRef<ReturnType<typeof setTimeout>>();
 
   React.useEffect(() => {
     let disposed = false;
 
     async function initialize(): Promise<void> {
-      let loginHint: string | undefined;
+      let identityContext: TeamsIdentityContext = {
+        isTeamsHosted: false,
+        supportsNestedAuth: false,
+      };
       try {
         await teamsJs.app.initialize();
         const context = await teamsJs.app.getContext();
-        loginHint = context.user?.loginHint;
+        let supportsNestedAuth = false;
+        try {
+          supportsNestedAuth = await teamsJs.nestedAppAuth.isNAAChannelRecommended();
+        } catch {
+          supportsNestedAuth = false;
+        }
+        identityContext = {
+          isTeamsHosted: true,
+          supportsNestedAuth,
+          homeAccountId: context.user?.id,
+          loginHint: context.user?.loginHint,
+          tenantId: context.user?.tenant?.id,
+        };
         if (context.app.host.name) {
           setHostName(context.app.host.name);
         }
@@ -62,9 +90,14 @@ export default function App() {
           return;
         }
         configRef.current = config;
-        identityRef.current = new MicrosoftIdentity(config, loginHint);
+        demoEmailRecipientRef.current = identityContext.loginHint;
+        identityRef.current = new MicrosoftIdentity(config, identityContext);
         speechRef.current = new SpeechController(config.defaultAgent, videoRef.current);
-        setAgents([config.defaultAgent]);
+        setAgents(
+          config.demoMode && config.demoAgents?.length
+            ? config.demoAgents
+            : [config.defaultAgent],
+        );
         setSelectedAgentId(config.defaultAgent.id);
         setState("ready");
         setStatus("Ready to connect");
@@ -77,6 +110,9 @@ export default function App() {
     void initialize();
     return () => {
       disposed = true;
+      if (autoSubmitTimerRef.current) {
+        clearTimeout(autoSubmitTimerRef.current);
+      }
       void speechRef.current?.close();
     };
   }, []);
@@ -98,10 +134,23 @@ export default function App() {
     const selectedName =
       agents.find((agent) => agent.id === selectedAgentId)?.displayName ||
       config.defaultAgent.displayName;
-    setStatus(`Signing in to ${selectedName}...`);
+    setStatus(`Connecting to ${selectedName}...`);
     try {
-      await identity.signIn();
-      const availableAgents = await loadAgentCatalog(config, identity);
+      let availableAgents: AgentDefinition[];
+      let catalogNotice: string | undefined;
+      if (config.demoMode && config.demoAgents?.length) {
+        availableAgents = config.demoAgents;
+      } else {
+        try {
+          availableAgents = await loadAgentCatalog(config);
+        } catch (error) {
+          availableAgents = [config.defaultAgent];
+          catalogNotice =
+            error instanceof Error
+              ? `The shared agent catalog is unavailable (${error.message}) Using the configured default agent.`
+              : "The shared agent catalog is unavailable. Using the configured default agent.";
+        }
+      }
       setAgents(availableAgents);
       const selected =
         availableAgents.find((agent) => agent.id === selectedAgentId) ||
@@ -113,13 +162,19 @@ export default function App() {
         availableAgents[0];
       setSelectedAgentId(selected.id);
       await speechRef.current?.setAgent(selected);
-      agentClientRef.current = new CopilotAgentClient(identity, selected);
+      setAvatarVisible(false);
+      agentClientRef.current = config.demoMode
+        ? new DemoAgentClient(selected, demoEmailRecipientRef.current)
+        : new CopilotAgentClient(identity, selected);
       const turn = await agentClientRef.current.connect();
       const welcome =
         turn.messages.length > 0
           ? turn.messages
           : [selected.welcomeMessage];
-      setMessages(welcome.map((text) => createMessage("agent", text)));
+      setMessages([
+        ...(catalogNotice ? [createMessage("system", catalogNotice)] : []),
+        ...welcome.map((text) => createMessage("agent", text)),
+      ]);
       setState("ready");
       setStatus(`${selected.displayName} is ready`);
       await speakMessages(welcome);
@@ -128,8 +183,8 @@ export default function App() {
     }
   }
 
-  async function sendMessage(): Promise<void> {
-    const text = draft.trim();
+  async function sendMessage(textOverride?: string): Promise<void> {
+    const text = (textOverride ?? draft).trim();
     if (!text || !agentClientRef.current || state === "thinking") {
       return;
     }
@@ -167,7 +222,13 @@ export default function App() {
       }
 
       setMessages((current) => [...current, ...nextMessages]);
+      setEmailDraftUrl(
+        turn.emailDraft
+          ? `https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(turn.emailDraft.to)}&subject=${encodeURIComponent(turn.emailDraft.subject)}&body=${encodeURIComponent(turn.emailDraft.body)}`
+          : "",
+      );
       if (completed) {
+        setVoiceConversation(false);
         setState("complete");
         setStatus("Conversation complete");
         await speakMessages(spoken, true);
@@ -181,37 +242,81 @@ export default function App() {
     }
   }
 
-  async function startListening(): Promise<void> {
+  async function startListening(autoSubmit = false): Promise<void> {
     if (!speechRef.current) {
       return;
     }
     try {
       setInterim("");
       setState("listening");
-      setStatus("Listening... select I'm done when finished");
+      setStatus(
+        autoSubmit
+          ? "Listening... pause when you finish"
+          : "Listening... select I'm done when finished",
+      );
       await speechRef.current.startListening(
-        (text) => setInterim(text),
+        (text) => {
+          setInterim(text);
+          if (autoSubmitTimerRef.current) {
+            clearTimeout(autoSubmitTimerRef.current);
+          }
+        },
         (text) => {
           setInterim(text);
           setDraft(text);
+          if (autoSubmit && voiceConversationActiveRef.current) {
+            if (autoSubmitTimerRef.current) {
+              clearTimeout(autoSubmitTimerRef.current);
+            }
+            autoSubmitTimerRef.current = setTimeout(() => {
+              void submitVoiceAnswer(text);
+            }, 1400);
+          }
         },
-        (message) => handleError(new Error(message), "Speech recognition stopped."),
+        (message) => {
+          setVoiceConversation(false);
+          handleError(new Error(message), "Speech recognition stopped.");
+        },
       );
     } catch (error) {
       handleError(error, "Microphone access failed.");
     }
   }
 
-  async function finishListening(): Promise<void> {
-    try {
-      await speechRef.current?.stopListening();
+  async function submitVoiceAnswer(text: string): Promise<void> {
+    if (!voiceConversationActiveRef.current || !text.trim()) {
+      return;
+    }
+    if (autoSubmitTimerRef.current) {
+      clearTimeout(autoSubmitTimerRef.current);
+      autoSubmitTimerRef.current = undefined;
+    }
+    await speechRef.current?.stopListening();
+    setInterim("");
+    await sendMessage(text);
+  }
+
+  function setVoiceConversation(active: boolean): void {
+    voiceConversationActiveRef.current = active;
+    setVoiceConversationActive(active);
+    if (!active && autoSubmitTimerRef.current) {
+      clearTimeout(autoSubmitTimerRef.current);
+      autoSubmitTimerRef.current = undefined;
+    }
+  }
+
+  async function startVoiceConversation(): Promise<void> {
+    setVoiceConversation(true);
+    await startListening(true);
+  }
+
+  async function stopVoiceConversation(): Promise<void> {
+    setVoiceConversation(false);
+    await speechRef.current?.stopListening().catch(() => undefined);
+    await speechRef.current?.stopSpeaking();
+    if (state !== "complete" && state !== "error") {
       setState("ready");
-      setStatus("Review your answer, then send");
-      if (interim.trim()) {
-        setDraft(interim.trim());
-      }
-    } catch (error) {
-      handleError(error, "Could not stop speech recognition.");
+      setStatus("Voice conversation stopped");
     }
   }
 
@@ -242,9 +347,13 @@ export default function App() {
     }
     setState(preserveCompletion ? "complete" : "ready");
     setStatus(preserveCompletion ? "Conversation complete" : "Your turn");
+    if (voiceConversationActiveRef.current && !preserveCompletion) {
+      await startListening(true);
+    }
   }
 
   function handleError(error: unknown, fallback: string): void {
+    setVoiceConversation(false);
     const message = error instanceof Error ? error.message : fallback;
     setState("error");
     setStatus(message || fallback);
@@ -257,10 +366,12 @@ export default function App() {
     }
     await speechRef.current?.stopSpeaking();
     await speechRef.current?.stopListening().catch(() => undefined);
+    setVoiceConversation(false);
     agentClientRef.current = undefined;
     setMessages([]);
     setDraft("");
     setInterim("");
+    setEmailDraftUrl("");
     setSelectedAgentId(agentId);
     const selected = agents.find((agent) => agent.id === agentId);
     if (selected) {
@@ -319,11 +430,17 @@ export default function App() {
                 <div className="pat-mark">{selectedAgent?.displayName.charAt(0) || "A"}</div>
                 <h3>Ready when you are</h3>
                 <p>
-                  Sign in with your work account. You can type or use your microphone, and
-                  you can turn avatar video off at any time.
+                  {hostName === "browser"
+                    ? "Connect with your work account for browser diagnostics. "
+                    : configRef.current?.demoMode
+                      ? "Demo mode starts without login or consent. "
+                      : "Teams uses your work identity automatically; first use may request Copilot Studio permission once. "}
+                  You can type or use your microphone, and you can turn avatar video off
+                  at any time.
                 </p>
                 <button className="primary-button" onClick={() => void connect()} disabled={busy}>
-                  Connect to {selectedAgent?.displayName || "agent"}
+                  {configRef.current?.demoMode ? "Start demo with " : "Connect to "}
+                  {selectedAgent?.displayName || "agent"}
                 </button>
               </div>
             )}
@@ -370,17 +487,20 @@ export default function App() {
               }}
             />
             <div className="composer-actions">
-              {state === "listening" ? (
-                <button className="secondary-button listening" onClick={() => void finishListening()}>
-                  I'm done
+              {voiceConversationActive ? (
+                <button
+                  className={`secondary-button${state === "listening" ? " listening" : ""}`}
+                  onClick={() => void stopVoiceConversation()}
+                >
+                  Stop conversation
                 </button>
               ) : (
                 <button
                   className="secondary-button"
-                  onClick={() => void startListening()}
+                  onClick={() => void startVoiceConversation()}
                   disabled={!connected || busy || state === "complete"}
                 >
-                  Use microphone
+                  Start voice conversation
                 </button>
               )}
               <button
@@ -390,6 +510,16 @@ export default function App() {
               >
                 Send
               </button>
+              {emailDraftUrl && (
+                <a
+                  className="primary-button"
+                  href={emailDraftUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Open self-addressed email
+                </a>
+              )}
             </div>
           </div>
         </div>
@@ -398,8 +528,11 @@ export default function App() {
           <div className="avatar-stage">
             <video
               ref={videoRef}
+              className={avatarVisible ? "avatar-visible" : undefined}
               autoPlay
               playsInline
+              onPlaying={() => setAvatarVisible(true)}
+              onEmptied={() => setAvatarVisible(false)}
               aria-label={`${selectedAgent?.displayName || "Agent"} speaking avatar`}
             />
             <div className="avatar-placeholder">
@@ -419,7 +552,12 @@ export default function App() {
               <input
                 type="checkbox"
                 checked={avatarEnabled}
-                onChange={(event) => setAvatarEnabled(event.target.checked)}
+                onChange={(event) => {
+                  setAvatarEnabled(event.target.checked);
+                  if (!event.target.checked) {
+                    setAvatarVisible(false);
+                  }
+                }}
               />
               <span>Avatar video</span>
             </label>

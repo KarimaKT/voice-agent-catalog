@@ -23,14 +23,11 @@
       "copilotSchemaName": {
         "value": "${{COPILOT_SCHEMA_NAME}}"
       },
-      "sharePointCatalogHostname": {
-        "value": "${{SHAREPOINT_CATALOG_HOSTNAME}}"
+      "catalogFlowUrl": {
+        "value": "${{CATALOG_FLOW_URL}}"
       },
-      "sharePointCatalogSitePath": {
-        "value": "${{SHAREPOINT_CATALOG_SITE_PATH}}"
-      },
-      "sharePointCatalogListName": {
-        "value": "${{SHAREPOINT_CATALOG_LIST_NAME}}"
+      "demoMode": {
+        "value": "${{DEMO_MODE}}"
       }
     }
   }

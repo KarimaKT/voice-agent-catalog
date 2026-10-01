@@ -18,6 +18,10 @@ interface RateLimitEntry {
   resetAt: number;
 }
 
+interface CatalogFlowResponse {
+  agents?: unknown[];
+}
+
 if (process.env.APPLICATIONINSIGHTS_CONNECTION_STRING) {
   useAzureMonitor();
 }
@@ -57,7 +61,7 @@ const adapter = secureServer
   : new ExpressAdapter();
 adapter.use((_request: Request, response: Response, next: NextFunction) => {
   response.removeHeader("X-Powered-By");
-  response.setHeader("Content-Security-Policy", "default-src 'self'; connect-src 'self' https://login.microsoftonline.com https://graph.microsoft.com https://res.cdn.office.net https://api.powerplatform.com https://*.api.powerplatform.com https://*.environment.api.powerplatform.com https://*.cognitiveservices.azure.com https://*.speech.microsoft.com wss://*.speech.microsoft.com; frame-ancestors https://teams.microsoft.com https://*.teams.microsoft.com https://*.cloud.microsoft; img-src 'self' data: blob:; media-src 'self' blob:; script-src 'self'; style-src 'self' 'unsafe-inline'");
+  response.setHeader("Content-Security-Policy", "default-src 'self'; connect-src 'self' https://login.microsoftonline.com https://res.cdn.office.net https://api.powerplatform.com https://*.api.powerplatform.com https://*.environment.api.powerplatform.com https://*.cognitiveservices.azure.com https://*.speech.microsoft.com wss://*.speech.microsoft.com; frame-ancestors https://teams.microsoft.com https://*.teams.microsoft.com https://*.cloud.microsoft; img-src 'self' data: blob:; media-src 'self' blob:; script-src 'self'; style-src 'self' 'unsafe-inline'");
   response.setHeader("Referrer-Policy", "no-referrer");
   response.setHeader("X-Content-Type-Options", "nosniff");
   next();
@@ -106,50 +110,96 @@ adapter.get("/api/health", (_request: Request, response: Response) => {
 
 adapter.get("/api/config", (_request: Request, response: Response) => {
   try {
-    const catalogValues = [
-      process.env.SHAREPOINT_CATALOG_HOSTNAME?.trim(),
-      process.env.SHAREPOINT_CATALOG_SITE_PATH?.trim(),
-      process.env.SHAREPOINT_CATALOG_LIST_NAME?.trim(),
-    ];
-    if (catalogValues.some(Boolean) && !catalogValues.every(Boolean)) {
-      throw new Error("SharePoint catalog settings must be configured together.");
-    }
-
+    const demoMode = process.env.DEMO_MODE?.trim().toLowerCase() === "true";
+    const defaultAgent = {
+      id: "default",
+      displayName: process.env.DEFAULT_AGENT_DISPLAY_NAME?.trim() || "Pat",
+      description:
+        process.env.DEFAULT_AGENT_DESCRIPTION?.trim() ||
+        "A four-question manager handoff interview in under three minutes.",
+      environmentId: getEnvironment("COPILOT_ENVIRONMENT_ID"),
+      schemaName: getEnvironment("COPILOT_SCHEMA_NAME"),
+      completionPhrase:
+        process.env.DEFAULT_AGENT_COMPLETION_PHRASE?.trim() ||
+        (demoMode
+          ? "Thank you. Your manager handoff summary is ready."
+          : defaultCompletionPhrase),
+      welcomeMessage:
+        process.env.DEFAULT_AGENT_WELCOME_MESSAGE?.trim() ||
+        defaultWelcomeMessage,
+      locale: process.env.SPEECH_LOCALE?.trim() || "en-US",
+      voiceName:
+        process.env.SPEECH_VOICE_NAME?.trim() || "en-US-AvaMultilingualNeural",
+      avatarCharacter: process.env.AVATAR_CHARACTER?.trim() || "lisa",
+      avatarStyle: process.env.AVATAR_STYLE?.trim() || "casual-sitting",
+      demoKind: "interview",
+    };
+    const catalogFlowUrl = process.env.CATALOG_FLOW_URL?.trim();
+    const catalogEnabled =
+      Boolean(catalogFlowUrl) && catalogFlowUrl?.toLowerCase() !== "disabled";
     response.setHeader("Cache-Control", "no-store");
     response.json({
       tenantId: getEnvironment("TENANT_ID"),
       clientId: getEnvironment("AAD_APP_CLIENT_ID"),
-      defaultAgent: {
-        id: "default",
-        displayName: process.env.DEFAULT_AGENT_DISPLAY_NAME?.trim() || "Pat",
-        description:
-          process.env.DEFAULT_AGENT_DESCRIPTION?.trim() ||
-          "A four-question manager handoff interview in under three minutes.",
-        environmentId: getEnvironment("COPILOT_ENVIRONMENT_ID"),
-        schemaName: getEnvironment("COPILOT_SCHEMA_NAME"),
-        completionPhrase:
-          process.env.DEFAULT_AGENT_COMPLETION_PHRASE?.trim() ||
-          defaultCompletionPhrase,
-        welcomeMessage:
-          process.env.DEFAULT_AGENT_WELCOME_MESSAGE?.trim() ||
-          defaultWelcomeMessage,
-        locale: process.env.SPEECH_LOCALE?.trim() || "en-US",
-        voiceName:
-          process.env.SPEECH_VOICE_NAME?.trim() || "en-US-AvaMultilingualNeural",
-        avatarCharacter: process.env.AVATAR_CHARACTER?.trim() || "lisa",
-        avatarStyle: process.env.AVATAR_STYLE?.trim() || "casual-sitting",
-      },
-      sharePointCatalog: catalogValues.every(Boolean)
-        ? {
-            hostname: catalogValues[0],
-            sitePath: catalogValues[1],
-            listName: catalogValues[2],
-          }
+      defaultAgent,
+      catalogEnabled,
+      demoMode,
+      demoAgents: demoMode
+        ? [
+            defaultAgent,
+            {
+              ...defaultAgent,
+              id: "orders",
+              displayName: "Morgan",
+              description:
+                "An order management assistant that finds orders and creates new order requests.",
+              completionPhrase: "Your order request has been placed.",
+              welcomeMessage:
+                "Hi, I'm Morgan. Ask me to show pending orders, find an order number, or place a new order.",
+              voiceName: "en-US-AndrewMultilingualNeural",
+              avatarCharacter: "harry",
+              avatarStyle: "casual",
+              demoKind: "orders",
+            },
+          ]
         : undefined,
     });
   } catch (error) {
     logger.error(error instanceof Error ? error.message : "Unable to load app configuration");
     response.status(500).json({ error: "The application is not configured." });
+  }
+});
+
+adapter.get("/api/catalog", async (_request: Request, response: Response) => {
+  const catalogFlowUrl = process.env.CATALOG_FLOW_URL?.trim();
+  if (!catalogFlowUrl || catalogFlowUrl.toLowerCase() === "disabled") {
+    response.status(404).json({ error: "The shared agent catalog is not configured." });
+    return;
+  }
+
+  try {
+    const flowResponse = await fetch(catalogFlowUrl, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ operation: "listEnabledAgents" }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!flowResponse.ok) {
+      throw new Error(`Catalog flow failed with status ${flowResponse.status}`);
+    }
+    const payload = (await flowResponse.json()) as CatalogFlowResponse;
+    if (!Array.isArray(payload.agents)) {
+      throw new Error("Catalog flow returned an invalid response");
+    }
+
+    response.setHeader("Cache-Control", "no-store");
+    response.json({ agents: payload.agents });
+  } catch (error) {
+    logger.error(error instanceof Error ? error.message : "Unable to load agent catalog");
+    response.status(502).json({ error: "The shared agent catalog is temporarily unavailable." });
   }
 });
 

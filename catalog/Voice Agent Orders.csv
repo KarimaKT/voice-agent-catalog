@@ -1,0 +1,5 @@
+Title,Customer,Product,Quantity,Status,OrderDate,RequestedBy,Notes
+ORD-1001,Contoso Retail,Surface Laptop 7,5,Processing,2026-09-28,Adele Vance,Priority rollout
+ORD-1002,Fabrikam Foods,Surface Pro 11,12,Pending,2026-09-29,Diego Siciliani,Awaiting stock confirmation
+ORD-1003,Northwind Traders,Teams Rooms Pro,3,Shipped,2026-09-25,Megan Bowen,Tracking sent
+ORD-1004,Adventure Works,Copilot for Microsoft 365,25,Pending,2026-09-30,Alex Wilber,License activation requested

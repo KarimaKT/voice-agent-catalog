@@ -20,15 +20,6 @@
   },
   "requiredResourceAccess": [
     {
-      "resourceAppId": "00000003-0000-0000-c000-000000000000",
-      "resourceAccess": [
-        {
-          "id": "205e70e5-aba6-4c52-a976-6d2d46c48043",
-          "type": "Scope"
-        }
-      ]
-    },
-    {
       "resourceAppId": "8578e004-a5c6-46e7-913e-12f58912df43",
       "resourceAccess": [
         {
@@ -47,6 +38,7 @@
   },
   "spa": {
     "redirectUris": [
+      "brk-multihub://${{TAB_DOMAIN}}",
       "${{TAB_ENDPOINT}}/auth/callback"
     ]
   }

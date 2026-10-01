@@ -18,20 +18,20 @@ param copilotEnvironmentId string
 @description('Copilot Studio agent schema name')
 param copilotSchemaName string
 
-@description('SharePoint hostname containing the agent catalog')
-param sharePointCatalogHostname string
-
-@description('Server-relative SharePoint site path containing the catalog')
-param sharePointCatalogSitePath string
-
-@description('Microsoft List display name for the agent catalog')
-param sharePointCatalogListName string = 'Pat Agent Catalog'
+@secure()
+@description('Signed Power Automate HTTP trigger URL for the maker-owned catalog flow')
+param catalogFlowUrl string = ''
 
 param location string = resourceGroup().location
 param speechLocale string = 'en-US'
 param speechVoiceName string = 'en-US-AvaMultilingualNeural'
 param avatarCharacter string = 'lisa'
 param avatarStyle string = 'casual-sitting'
+@allowed([
+  'false'
+  'true'
+])
+param demoMode string = 'false'
 
 var tags = {
   application: 'voice-agent-catalog'
@@ -44,6 +44,8 @@ var keyVaultName = take('${resourceBaseName}-kv', 24)
 var logAnalyticsName = '${resourceBaseName}-logs'
 var appInsightsName = '${resourceBaseName}-insights'
 var speechSecretName = 'speech-key'
+var catalogFlowSecretName = 'catalog-flow-url'
+var catalogFlowEnabled = !empty(catalogFlowUrl) && catalogFlowUrl != 'disabled'
 
 resource serverfarm 'Microsoft.Web/serverfarms@2022-09-01' = {
   name: planName
@@ -109,6 +111,14 @@ resource speechKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   name: speechSecretName
   properties: {
     value: speech.listKeys().key1
+  }
+}
+
+resource catalogFlowSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (catalogFlowEnabled) {
+  parent: keyVault
+  name: catalogFlowSecretName
+  properties: {
+    value: catalogFlowUrl
   }
 }
 
@@ -180,16 +190,12 @@ resource webApp 'Microsoft.Web/sites@2022-09-01' = {
           value: copilotSchemaName
         }
         {
-          name: 'SHAREPOINT_CATALOG_HOSTNAME'
-          value: sharePointCatalogHostname
+          name: 'DEMO_MODE'
+          value: demoMode
         }
         {
-          name: 'SHAREPOINT_CATALOG_SITE_PATH'
-          value: sharePointCatalogSitePath
-        }
-        {
-          name: 'SHAREPOINT_CATALOG_LIST_NAME'
-          value: sharePointCatalogListName
+          name: 'CATALOG_FLOW_URL'
+          value: catalogFlowEnabled ? '@Microsoft.KeyVault(VaultName=${keyVaultName};SecretName=${catalogFlowSecretName})' : ''
         }
         {
           name: 'SPEECH_REGION'
