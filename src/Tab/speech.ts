@@ -1,0 +1,194 @@
+import * as SpeechSDK from "microsoft-cognitiveservices-speech-sdk";
+
+import type { AgentDefinition, SpeechCredentials } from "./types";
+
+async function getCredentials(): Promise<SpeechCredentials> {
+  const response = await fetch("/api/speech/token", { method: "POST" });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => undefined)) as { error?: string } | undefined;
+    throw new Error(body?.error || "Unable to obtain Speech credentials.");
+  }
+  return (await response.json()) as SpeechCredentials;
+}
+
+function createSpeechConfig(
+  credentials: SpeechCredentials,
+  agent: AgentDefinition,
+): SpeechSDK.SpeechConfig {
+  const speechConfig = SpeechSDK.SpeechConfig.fromAuthorizationToken(
+    credentials.token,
+    credentials.region,
+  );
+  speechConfig.speechRecognitionLanguage = agent.locale;
+  speechConfig.speechSynthesisLanguage = agent.locale;
+  speechConfig.speechSynthesisVoiceName = agent.voiceName;
+  return speechConfig;
+}
+
+export class SpeechController {
+  private recognizer?: SpeechSDK.SpeechRecognizer;
+  private synthesizer?: SpeechSDK.SpeechSynthesizer;
+  private avatarSynthesizer?: SpeechSDK.AvatarSynthesizer;
+  private peerConnection?: RTCPeerConnection;
+  private finalSegments: string[] = [];
+
+  constructor(
+    private agent: AgentDefinition,
+    private readonly video: HTMLVideoElement,
+  ) {}
+
+  async setAgent(agent: AgentDefinition): Promise<void> {
+    const profileChanged =
+      this.agent.locale !== agent.locale ||
+      this.agent.voiceName !== agent.voiceName ||
+      this.agent.avatarCharacter !== agent.avatarCharacter ||
+      this.agent.avatarStyle !== agent.avatarStyle;
+    if (profileChanged) {
+      await this.closeAvatar();
+    }
+    this.agent = agent;
+  }
+
+  async startListening(
+    onInterim: (text: string) => void,
+    onFinal: (text: string) => void,
+    onError: (message: string) => void,
+  ): Promise<void> {
+    await this.stopSpeaking();
+    await this.stopListening();
+    const credentials = await getCredentials();
+    const speechConfig = createSpeechConfig(credentials, this.agent);
+    const audioConfig = SpeechSDK.AudioConfig.fromDefaultMicrophoneInput();
+    this.finalSegments = [];
+    this.recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
+
+    this.recognizer.recognizing = (_sender, event) => {
+      onInterim([...this.finalSegments, event.result.text].filter(Boolean).join(" "));
+    };
+    this.recognizer.recognized = (_sender, event) => {
+      const text = event.result.text.trim();
+      if (text) {
+        this.finalSegments.push(text);
+        onFinal(this.finalSegments.join(" "));
+      }
+    };
+    this.recognizer.canceled = (_sender, event) => {
+      onError(event.errorDetails || "Speech recognition was canceled.");
+    };
+
+    await new Promise<void>((resolve, reject) => {
+      this.recognizer?.startContinuousRecognitionAsync(resolve, reject);
+    });
+  }
+
+  async stopListening(): Promise<void> {
+    if (!this.recognizer) {
+      return;
+    }
+    const recognizer = this.recognizer;
+    this.recognizer = undefined;
+    await new Promise<void>((resolve, reject) => {
+      recognizer.stopContinuousRecognitionAsync(
+        () => {
+          recognizer.close();
+          resolve();
+        },
+        reject,
+      );
+    });
+  }
+
+  async speak(text: string, avatarEnabled: boolean): Promise<void> {
+    if (!text) {
+      return;
+    }
+    await this.stopSpeaking();
+    const credentials = await getCredentials();
+    const speechConfig = createSpeechConfig(credentials, this.agent);
+
+    if (avatarEnabled) {
+      await this.speakWithAvatar(text, credentials, speechConfig);
+      return;
+    }
+
+    const audioConfig = SpeechSDK.AudioConfig.fromDefaultSpeakerOutput();
+    this.synthesizer = new SpeechSDK.SpeechSynthesizer(speechConfig, audioConfig);
+    await new Promise<void>((resolve, reject) => {
+      this.synthesizer?.speakTextAsync(
+        text,
+        () => resolve(),
+        (error) => reject(new Error(error)),
+      );
+    });
+  }
+
+  async stopSpeaking(): Promise<void> {
+    if (this.avatarSynthesizer) {
+      await this.avatarSynthesizer.stopSpeakingAsync().catch(() => undefined);
+    }
+    this.synthesizer?.close();
+    this.synthesizer = undefined;
+  }
+
+  async close(): Promise<void> {
+    await this.stopListening().catch(() => undefined);
+    await this.stopSpeaking();
+    await this.closeAvatar();
+  }
+
+  private async closeAvatar(): Promise<void> {
+    if (this.avatarSynthesizer) {
+      await this.avatarSynthesizer.close();
+      this.avatarSynthesizer = undefined;
+    }
+    this.peerConnection?.close();
+    this.peerConnection = undefined;
+    this.video.srcObject = null;
+  }
+
+  private async speakWithAvatar(
+    text: string,
+    credentials: SpeechCredentials,
+    speechConfig: SpeechSDK.SpeechConfig,
+  ): Promise<void> {
+    if (!credentials.relay) {
+      throw new Error("Avatar relay credentials are unavailable.");
+    }
+
+    if (!this.avatarSynthesizer || !this.peerConnection) {
+      this.peerConnection = new RTCPeerConnection({
+        iceServers: [
+          {
+            urls: [credentials.relay.url],
+            username: credentials.relay.username,
+            credential: credentials.relay.credential,
+          },
+        ],
+      });
+      this.peerConnection.addTransceiver("video", { direction: "recvonly" });
+      this.peerConnection.addTransceiver("audio", { direction: "recvonly" });
+      this.peerConnection.ontrack = (event) => {
+        if (event.track.kind === "video" || !this.video.srcObject) {
+          this.video.srcObject = event.streams[0];
+          void this.video.play();
+        }
+      };
+
+      const avatarConfig = new SpeechSDK.AvatarConfig(
+        this.agent.avatarCharacter,
+        this.agent.avatarStyle,
+        new SpeechSDK.AvatarVideoFormat(),
+      );
+      this.avatarSynthesizer = new SpeechSDK.AvatarSynthesizer(speechConfig, avatarConfig);
+      const result = await this.avatarSynthesizer.startAvatarAsync(this.peerConnection);
+      if (result.reason !== SpeechSDK.ResultReason.SynthesizingAudioCompleted) {
+        throw new Error(result.errorDetails || "The avatar connection failed.");
+      }
+    }
+
+    const result = await this.avatarSynthesizer.speakTextAsync(text);
+    if (result.reason !== SpeechSDK.ResultReason.SynthesizingAudioCompleted) {
+      throw new Error(result.errorDetails || "The avatar could not speak.");
+    }
+  }
+}

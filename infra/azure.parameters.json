@@ -1,0 +1,36 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "resourceBaseName": {
+        "value": "tab${{RESOURCE_SUFFIX}}"
+      },
+      "webAppSku": {
+        "value": "B1"
+      },
+      "location": {
+        "value": "${{AZURE_LOCATION}}"
+      },
+      "tenantId": {
+        "value": "${{AAD_APP_TENANT_ID}}"
+      },
+      "clientId": {
+        "value": "${{AAD_APP_CLIENT_ID}}"
+      },
+      "copilotEnvironmentId": {
+        "value": "${{COPILOT_ENVIRONMENT_ID}}"
+      },
+      "copilotSchemaName": {
+        "value": "${{COPILOT_SCHEMA_NAME}}"
+      },
+      "sharePointCatalogHostname": {
+        "value": "${{SHAREPOINT_CATALOG_HOSTNAME}}"
+      },
+      "sharePointCatalogSitePath": {
+        "value": "${{SHAREPOINT_CATALOG_SITE_PATH}}"
+      },
+      "sharePointCatalogListName": {
+        "value": "${{SHAREPOINT_CATALOG_LIST_NAME}}"
+      }
+    }
+  }

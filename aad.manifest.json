@@ -1,0 +1,53 @@
+{
+  "id": "${{AAD_APP_OBJECT_ID}}",
+  "appId": "${{AAD_APP_CLIENT_ID}}",
+  "displayName": "Voice Agent Catalog",
+  "identifierUris": [],
+  "signInAudience": "AzureADMyOrg",
+  "api": {
+    "requestedAccessTokenVersion": 2,
+    "oauth2PermissionScopes": [],
+    "preAuthorizedApplications": []
+  },
+  "info": {},
+  "optionalClaims": {
+    "idToken": [],
+    "accessToken": [],
+    "saml2Token": []
+  },
+  "publicClient": {
+    "redirectUris": []
+  },
+  "requiredResourceAccess": [
+    {
+      "resourceAppId": "00000003-0000-0000-c000-000000000000",
+      "resourceAccess": [
+        {
+          "id": "205e70e5-aba6-4c52-a976-6d2d46c48043",
+          "type": "Scope"
+        }
+      ]
+    },
+    {
+      "resourceAppId": "8578e004-a5c6-46e7-913e-12f58912df43",
+      "resourceAccess": [
+        {
+          "id": "dc254dba-1cf4-4b11-89cf-1fe46f00416e",
+          "type": "Scope"
+        }
+      ]
+    }
+  ],
+  "web": {
+    "redirectUris": [],
+    "implicitGrantSettings": {
+      "enableAccessTokenIssuance": false,
+      "enableIdTokenIssuance": false
+    }
+  },
+  "spa": {
+    "redirectUris": [
+      "${{TAB_ENDPOINT}}/auth/callback"
+    ]
+  }
+}

@@ -1,0 +1,24 @@
+# TeamsFx files
+env/.env.*
+!env/.env.*.example
+.localConfigs
+build
+appPackage/build
+.azure/
+.fx/
+PROJECT-LOCAL.md
+Pat Voice POC/
+infor-voice-interview-agent-report.md
+
+# dependencies
+node_modules/
+
+# misc
+.env
+.deployment
+.DS_Store
+
+# build
+dist/
+infra/azure.json
+*.zip
