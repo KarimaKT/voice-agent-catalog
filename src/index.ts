@@ -3,9 +3,8 @@ import https from "https";
 import path from "path";
 
 import { useAzureMonitor } from "@azure/monitor-opentelemetry";
-import { App, ExpressAdapter, IPlugin } from "@microsoft/teams.apps";
+import { App, ExpressAdapter } from "@microsoft/teams.apps";
 import { ConsoleLogger } from "@microsoft/teams.common/logging";
-import { DevtoolsPlugin } from "@microsoft/teams.dev";
 import { type NextFunction, type Request, type Response } from "express";
 
 interface RelayTokenResponse {
@@ -63,15 +62,9 @@ adapter.use((_request: Request, response: Response, next: NextFunction) => {
   response.setHeader("X-Content-Type-Options", "nosniff");
   next();
 });
-const plugins: IPlugin[] = [];
-if (process.env.SSL_KEY_FILE) {
-  plugins.push(new DevtoolsPlugin());
-}
-
 const logger = new ConsoleLogger("voice-agent-catalog", { level: "info" });
 const app = new App({
   logger,
-  plugins,
   httpServerAdapter: adapter,
   skipAuth: true,
 });
