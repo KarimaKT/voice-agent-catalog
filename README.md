@@ -176,6 +176,42 @@ one enabled SharePoint row containing:
 The app reads the list when the user connects. No Teams package change is
 required. See [Catalog administration](catalog/README.md).
 
+### Example voices and avatars
+
+Set `VoiceName`, `AvatarCharacter`, and `AvatarStyle` in the catalog row. These
+are a few useful English (US) voice choices:
+
+| Voice name | Voice | Type | Available speaking styles |
+| --- | --- | --- | --- |
+| `en-US-AvaMultilingualNeural` | Ava (female) | Multilingual | Default |
+| `en-US-AndrewMultilingualNeural` | Andrew (male) | Multilingual | `empathetic`, `relieved` |
+| `en-US-JennyNeural` | Jenny (female) | Standard neural | `assistant`, `chat`, `cheerful`, `customerservice`, `friendly`, `newscast`, and more |
+| `en-US-GuyNeural` | Guy (male) | Standard neural | `cheerful`, `friendly`, `newscast`, `whispering`, and more |
+| `en-US-AriaNeural` | Aria (female) | Standard neural | `chat`, `customerservice`, `empathetic`, `narration-professional`, and more |
+
+The catalog selects the voice name. Applying an optional speaking style requires
+SSML support in the conversation's synthesis path; it is not currently a
+separate catalog field. See Microsoft's complete
+[language and voice support table](https://learn.microsoft.com/azure/ai-services/speech-service/language-support?tabs=tts)
+for locales, gender, multilingual support, and all available styles.
+
+Some standard real-time avatar choices are:
+
+| `AvatarCharacter` | Example `AvatarStyle` values |
+| --- | --- |
+| `harry` | `casual`, `youthful` |
+| `lisa` | `casual-sitting`, `graceful-sitting`, `graceful-standing`, `technical-sitting`, `technical-standing` |
+| `lori` | `casual`, `graceful`, `formal` |
+| `max` | `business`, `casual`, `formal` |
+| `meg` | `business`, `casual`, `formal` |
+
+Character and style values are case-sensitive. Availability can vary by Azure
+region, and not every voice or avatar supports every feature. Review the
+complete Microsoft lists for
+[standard avatar characters and styles](https://learn.microsoft.com/azure/ai-services/speech-service/text-to-speech-avatar/standard-avatars)
+and [real-time avatar synthesis](https://learn.microsoft.com/azure/ai-services/speech-service/text-to-speech-avatar/real-time-synthesis-avatar)
+before choosing a production configuration.
+
 ## Build
 
 Prerequisites:
