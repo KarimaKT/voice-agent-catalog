@@ -34,7 +34,6 @@
         "@vitejs/plugin-react": "^4.3.4",
         "dotenv": "^16.4.5",
         "env-cmd": "^11.0.0",
-        "nodemon": "^3.1.4",
         "rimraf": "^6.0.1",
         "tsup": "^8.4.0",
         "typescript": "^5.4.5",
@@ -43,7 +42,7 @@
     "scripts": {
         "dev:teamsfx": "env-cmd --silent -f .localConfigs npm run dev",
         "clean": "rimraf ./dist",
-        "dev": "npm run build:frontend && nodemon",
+        "dev": "npm run build && node -r dotenv/config .",
         "build": "tsup && npm run build:frontend",
         "build:frontend": "vite build --outDir dist/client",
         "start": "node dist/index.js"

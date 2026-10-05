@@ -108,6 +108,11 @@ adapter.get("/api/health", (_request: Request, response: Response) => {
   response.json({ status: "ok" });
 });
 
+adapter.get("/", (_request: Request, response: Response) => {
+  response.setHeader("Cache-Control", "no-store");
+  response.redirect(302, "/tabs/home");
+});
+
 adapter.get("/api/config", (_request: Request, response: Response) => {
   try {
     const demoMode = process.env.DEMO_MODE?.trim().toLowerCase() === "true";

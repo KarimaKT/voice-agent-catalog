@@ -3,9 +3,10 @@ name: deploy-voice-agent-catalog
 description: |
   Collect customer-specific configuration and deploy the Voice Agent Catalog
   sample end to end: Copilot Studio reference agent and actions, SharePoint
-  agent catalog, Entra application, Azure resources, Teams personal app, and
-  verification. Use when a customer asks to install, configure, provision,
-  deploy, publish, or update this sample.
+  agent catalog, Entra application, Azure resources, standalone web app, Teams
+  personal app or organizational catalog submission, and verification. Use
+  when a customer asks to install, configure, provision, deploy, publish, or
+  update this sample.
 license: MIT
 ---
 
@@ -29,7 +30,25 @@ Complete all of these surfaces:
 6. A single-tenant Entra SPA and tenant-specific Teams personal app.
 7. Azure App Service, Speech S0, Key Vault, Application Insights, and Log
    Analytics resources.
-8. A deployed and verified application and an installable Teams package.
+8. A deployed and verified standalone web application.
+9. An installable Teams package, with optional submission to the tenant's
+   organizational app catalog.
+
+## Deployment profiles
+
+Ask for the hosting and channel profile during intake:
+
+1. **Azure managed (recommended):** deploy the included App Service, Speech,
+   Key Vault, and monitoring resources.
+2. **Existing Node host:** build the Node.js 22 application for a
+   customer-supplied HTTPS hosting platform. Require the customer platform's
+   deployment command, secret-management method, public origin, and health
+   verification. Do not provision App Service or Key Vault unless requested.
+
+Either hosting profile can be standalone-web only, Teams only, or both. Teams
+organizational catalog submission is distinct from public Teams store
+publication. Never claim public store publication; it requires Partner Center
+and Microsoft certification.
 
 The Teams component is a personal tab that calls the Copilot Studio agent. Do
 not describe or provision a separate Bot Framework bot unless the repository
@@ -76,6 +95,10 @@ Collect or discover these values:
 ### Customer and access
 
 - Deployment owner email.
+- Delivery channel: standalone web, personal/pilot Teams app, Teams
+  organizational catalog, or both web and Teams.
+- Hosting target: included Azure managed profile or an existing Node.js 22
+  HTTPS platform.
 - Microsoft Entra tenant ID.
 - Azure subscription name and ID.
 - Azure region that supports Speech S0 real-time avatars and has App Service B1
@@ -152,9 +175,19 @@ region with the user before provisioning.
 
 ## Phase 3: Copilot Studio agent
 
-Prefer importing the tenant-neutral unmanaged solution when the repository
-contains one under `copilot-studio/solution/`. If no solution package is
-present, create the agent with the included tenant-neutral files:
+Prefer importing the tenant-neutral solution package when the repository
+contains:
+
+```text
+copilot-studio/packages/pat-manager-handoff-solution.zip
+```
+
+Import it through **Solutions** in the target Power Platform environment. Then
+add the destination-owned Outlook action because reusable solution packages do
+not contain live connector credentials or recipient values.
+
+If no solution package is present or import is unavailable, create the agent
+with the included tenant-neutral files:
 
 - `copilot-studio/agent-instructions.txt`
 - `copilot-studio/outlook-action.md`
@@ -267,7 +300,7 @@ Outlook delivery.
 Leave generated Entra, Teams, endpoint, and resource ID values empty before the
 first provision. Confirm the environment file is ignored by Git.
 
-## Phase 6: Build and Azure validation
+## Phase 6: Build and hosting validation
 
 Run:
 
@@ -277,8 +310,8 @@ npm run build
 az bicep build --file infra/azure.bicep
 ```
 
-Follow the repository's Azure preparation and validation workflow. Validation
-must include:
+For the Azure managed profile, follow the repository's Azure preparation and
+validation workflow. Validation must include:
 
 - authenticated subscription;
 - Bicep build and lint;
@@ -291,9 +324,19 @@ must include:
 
 Do not deploy until `.azure/deployment-plan.md` has status `Validated`.
 
+For an existing Node host, validate:
+
+- Node.js 22 runtime support;
+- `npm ci`, `npm run build`, and `npm start`;
+- an HTTPS public origin;
+- secure injection of `SPEECH_KEY` and `CATALOG_FLOW_URL`;
+- all required runtime environment variables;
+- final Entra and Teams redirect/domain values; and
+- the customer platform's rollback and health-check procedure.
+
 ## Phase 7: Provision and deploy
 
-Use the repository lifecycle:
+For the Azure managed profile, use the repository lifecycle:
 
 ```powershell
 npx -y --package @microsoft/m365agentstoolkit-cli atk provision `
@@ -311,7 +354,11 @@ If tenant policy requires Key Vault purge protection, keep it enabled. If a
 region has zero B1 quota, select another Speech-avatar-supported region and
 revalidate instead of silently changing the architecture.
 
-## Phase 8: Consent, package, and installation
+For an existing Node host, use the customer-approved deployment command. Never
+copy secrets into the repository, client bundle, image, or plain-text manifest.
+Verify the public `/api/health` endpoint and root redirect before continuing.
+
+## Phase 8: Consent, web channel, Teams package, and installation
 
 Verify the Entra SPA has:
 
@@ -331,12 +378,29 @@ Build and validate the Teams package with Agents Toolkit. Install the generated
 tenant-specific ZIP for the deployment owner, then share or assign it to the
 initial testers according to tenant policy.
 
+Verify the standalone channel at:
+
+```text
+https://<deployed-domain>/
+```
+
+The root must redirect to `/tabs/home`. Outside Teams, browser MSAL uses the
+deployed `/auth/callback` redirect. The standalone channel still requires each
+user to have access to the selected Copilot Studio agent.
+
+For a personal or pilot Teams installation, use `atk install`. For a Teams
+organizational catalog deployment, use the repository's `atk publish` stage and
+tell the user that a Teams administrator must approve the submitted app and
+apply tenant policies. Do not claim this publishes to the public Teams store;
+public store distribution requires Partner Center and Microsoft certification.
+
 ## Phase 9: End-to-end verification
 
 Verify all of these:
 
 1. `GET /api/health` returns `{"status":"ok"}`.
-2. `/tabs/home` returns HTTP 200 and the Content Security Policy header.
+2. `/` redirects to `/tabs/home`, and `/tabs/home` returns HTTP 200 with the
+   Content Security Policy header.
 3. `/api/config` contains the expected default agent and catalog-enabled state.
    If demo mode is selected, also verify `demoMode: true`.
 4. Key Vault references resolve and neither secret reaches the browser.
@@ -357,7 +421,8 @@ Verify all of these:
 12. Avatar mode uses the selected character/style, with audio-only fallback
     when relay credentials are unavailable.
 13. Completing the real-agent interview sends exactly one HTML email. In demo
-    mode, verify that the UI explicitly says email was not sent.
+    mode inside Teams, verify that Pat opens a self-addressed Outlook draft and
+    does not claim it was automatically sent.
 14. The UI displays the selected agent's configured completion phrase.
 15. Application Insights contains health and failure telemetry but no transcript
     or generated HTML content.
@@ -372,6 +437,7 @@ Provide the customer:
 
 - fully qualified `https://` application endpoint;
 - Teams package path;
+- selected delivery channel and Teams organizational-catalog approval status;
 - Copilot Studio agent name and environment;
 - SharePoint list URL;
 - deployed Azure resource group and region;

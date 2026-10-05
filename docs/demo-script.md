@@ -13,7 +13,7 @@
 2. Point out Lisa's avatar and Ava's voice.
 3. Select **Start voice conversation** once.
 4. Give these short answers, pausing after each:
-   - "I'm Karima, a solution architect."
+   - "I'm Avery, a solution architect."
    - "My priority is preparing the customer voice-agent demonstration."
    - "I need help confirming the production authentication approach."
    - "The next step is to validate the two-agent catalog and hand it over."

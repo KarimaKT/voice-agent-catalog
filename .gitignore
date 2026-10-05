@@ -22,3 +22,4 @@ node_modules/
 dist/
 infra/azure.json
 *.zip
+!copilot-studio/packages/pat-manager-handoff-solution.zip

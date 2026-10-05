@@ -70,7 +70,7 @@
                 "background": {
                     "activeOnStart": true,
                     "beginsPattern": ".*",
-                    "endsPattern": "listening on port 3978|[nodemon] app crashed"
+                    "endsPattern": "listening on TCP port 3978|Application startup failed"
                 }
             }
         },
