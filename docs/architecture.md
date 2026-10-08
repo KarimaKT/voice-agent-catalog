@@ -13,7 +13,7 @@ rebuilding the Teams client.
 2. The client initializes Teams JS and reads the Teams user's account context.
 3. MSAL nested app authentication obtains the Teams user's token silently, or
    shows a one-time Copilot Studio consent dialog when required.
-4. The client asks App Service for the catalog.
+4. The client asks App Service for the catalog with a best-effort email hint.
 5. App Service calls the signed Power Automate HTTP trigger from Key Vault.
 6. The flow reads SharePoint using its maker-owned connector connection.
 7. The user selects an agent.
@@ -21,6 +21,10 @@ rebuilding the Teams client.
 9. The browser requests a short-lived Speech token from the same-origin broker.
 10. App Service resolves the Speech key from Key Vault with managed identity.
 11. Speech runs STT/TTS and, when enabled, establishes avatar WebRTC media.
+
+STT uses the user's selected spoken input language. Catalog `Locale` remains
+the output contract for the agent, TTS, and avatar. The input selection
+defaults to that output locale.
 
 ## Why an Entra app registration is required
 
@@ -56,6 +60,22 @@ browser-only callback page does not render React or an agent.
 - The Outlook connection is owned by Copilot Studio/Power Platform, not this
   web app.
 - The app does not intentionally store messages or generated email HTML.
+- Agent-provided URLs are accepted only for `http`/`https`; the React renderer
+  uses elements and text nodes rather than unsafe HTML.
+
+The catalog flow may filter `Restricted` rows using direct `AllowedUsers`
+people-picker entries and may return an administrator-only configuration link.
+The email hint is not proof of identity. Copilot Studio sharing and invocation
+authorization are always the final security boundary.
+
+## Harness compatibility
+
+Catalog metadata accepts optional arbitrary `Harness` values for forward
+compatibility. The current live transport uses the Copilot Studio Agents SDK
+and has been verified only with the standard harness. GitHub Copilot/Copilot
+Chat harnesses do not currently support Direct Line/Agents SDK transport, so
+they are documented rather than rejected and require a future transport
+adapter.
 
 ## POC limitations
 

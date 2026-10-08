@@ -12,7 +12,13 @@ import {
   type StartRequest,
 } from "@microsoft/agents-copilotstudio-client";
 
-import type { AgentDefinition, AppConfig } from "./types";
+import type {
+  AgentAction,
+  AgentAttachment,
+  AgentCitation,
+  AgentDefinition,
+  AppConfig,
+} from "./types";
 
 function createConnectionSettings(agent: AgentDefinition): ConnectionSettings {
   return new ConnectionSettings({
@@ -24,13 +30,21 @@ function createConnectionSettings(agent: AgentDefinition): ConnectionSettings {
 }
 
 export interface AgentTurn {
-  messages: string[];
+  messages: AgentMessage[];
   conversationId: string;
   emailDraft?: {
     to: string;
     subject: string;
     body: string;
   };
+}
+
+export interface AgentMessage {
+  text: string;
+  speak?: string;
+  attachments?: AgentAttachment[];
+  citations?: AgentCitation[];
+  suggestedActions?: AgentAction[];
 }
 
 export interface AgentClient {
@@ -115,9 +129,21 @@ export class MicrosoftIdentity {
         const message = this.teamsContext.isTeamsHosted
           ? "Teams could not authorize Copilot Studio. Grant the requested permission and try again; if the tenant requires admin approval, ask an administrator or use the anonymous Direct Line option."
           : "Microsoft sign-in was cancelled or could not authorize Copilot Studio.";
-        throw new Error(message, { cause: interactiveError });
+        const wrapped = new Error(message);
+        (wrapped as Error & { cause?: unknown }).cause = interactiveError;
+        throw wrapped;
       }
     }
+  }
+
+  getBestEffortUserEmail(): string | undefined {
+    return this.teamsContext.loginHint || this.account?.username || undefined;
+  }
+
+  async ensureUserIdentity(agent: AgentDefinition): Promise<string | undefined> {
+    const settings = createConnectionSettings(agent);
+    await this.acquireToken([ScopeHelper.getScopeFromSettings(settings)]);
+    return this.getBestEffortUserEmail();
   }
 }
 
@@ -142,7 +168,7 @@ export class CopilotAgentClient {
       emitStartConversationEvent: false,
       locale: this.agent.locale,
     };
-    const messages: string[] = [];
+    const messages: AgentMessage[] = [];
 
     for await (const activity of this.client.startConversationStreaming(startRequest)) {
       this.captureActivity(activity, messages);
@@ -163,7 +189,7 @@ export class CopilotAgentClient {
     const activity = new Activity(ActivityTypes.Message);
     activity.text = text;
     activity.conversation = { id: this.conversationId };
-    const messages: string[] = [];
+    const messages: AgentMessage[] = [];
 
     for await (const reply of this.client.sendActivityStreaming(activity, this.conversationId)) {
       this.captureActivity(reply, messages);
@@ -172,14 +198,165 @@ export class CopilotAgentClient {
     return { messages, conversationId: this.conversationId };
   }
 
-  private captureActivity(activity: Activity, messages: string[]): void {
+  private captureActivity(activity: Activity, messages: AgentMessage[]): void {
     if (activity.conversation?.id) {
       this.conversationId = activity.conversation.id;
     }
-    if (activity.type === ActivityTypes.Message && activity.text?.trim()) {
-      messages.push(activity.text.trim());
+    if (activity.type === ActivityTypes.Message) {
+      const message = normalizeActivity(activity);
+      if (
+        message.text ||
+        message.attachments?.length ||
+        message.citations?.length ||
+        message.suggestedActions?.length
+      ) {
+        messages.push(message);
+      }
     }
   }
+}
+
+function safeHttpUrl(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.toString() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function textValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function adaptiveCardText(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value.map(adaptiveCardText).filter(Boolean).join(" ");
+  }
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+  const item = value as Record<string, unknown>;
+  const ownText =
+    textValue(item.text) ||
+    (item.type === "FactSet" && Array.isArray(item.facts)
+      ? item.facts
+          .map((fact) => {
+            if (!fact || typeof fact !== "object") {
+              return "";
+            }
+            const entry = fact as Record<string, unknown>;
+            return [textValue(entry.title), textValue(entry.value)].filter(Boolean).join(" ");
+          })
+          .join(" ")
+      : "");
+  return [
+    ownText,
+    adaptiveCardText(item.items),
+    adaptiveCardText(item.columns),
+  ].filter(Boolean).join(" ");
+}
+
+function normalizeActivity(activity: Activity): AgentMessage {
+  const attachments: AgentAttachment[] = [];
+  const attachmentSpeech: string[] = [];
+  for (const item of activity.attachments || []) {
+    const contentType = item.contentType.toLocaleLowerCase();
+    const url = safeHttpUrl(item.contentUrl);
+    if (contentType === "application/vnd.microsoft.card.adaptive" && item.content) {
+      const card = item.content as Record<string, unknown>;
+      attachments.push({
+        kind: "adaptiveCard",
+        name: textValue(item.name),
+        body: Array.isArray(card.body)
+          ? card.body.filter((entry): entry is Record<string, unknown> =>
+              Boolean(entry && typeof entry === "object"),
+            )
+          : [],
+        actions: Array.isArray(card.actions)
+          ? card.actions.filter((entry): entry is Record<string, unknown> =>
+              Boolean(entry && typeof entry === "object"),
+            )
+          : [],
+      });
+      const cardSpeech = adaptiveCardText(card.body);
+      if (cardSpeech) {
+        attachmentSpeech.push(cardSpeech);
+      }
+    } else if (url && contentType.startsWith("image/")) {
+      attachments.push({
+        kind: "image",
+        url,
+        name: textValue(item.name),
+        alt: textValue(item.name) || textValue(activity.summary) || "Agent-generated image",
+      });
+    } else if (url) {
+      attachments.push({
+        kind: "file",
+        url,
+        name: textValue(item.name) || "Open attachment",
+        contentType: item.contentType,
+      });
+    }
+  }
+
+  const citations: AgentCitation[] = [];
+  for (const entity of activity.entities || []) {
+    const candidate = entity as unknown as Record<string, unknown>;
+    const rawCitations = candidate.citation;
+    if (!Array.isArray(rawCitations)) {
+      continue;
+    }
+    for (const raw of rawCitations) {
+      if (!raw || typeof raw !== "object") {
+        continue;
+      }
+      const appearance = (raw as Record<string, unknown>).appearance;
+      if (!appearance || typeof appearance !== "object") {
+        continue;
+      }
+      const detail = appearance as Record<string, unknown>;
+      const name = textValue(detail.name);
+      if (name) {
+        citations.push({
+          name,
+          abstract: textValue(detail.abstract),
+          url: safeHttpUrl(detail.url),
+        });
+      }
+    }
+  }
+
+  const suggestedActions: AgentAction[] = (activity.suggestedActions?.actions || [])
+    .flatMap<AgentAction>((action) => {
+      const title = textValue(action.title) || textValue(action.displayText);
+      if (!title) {
+        return [];
+      }
+      const type = String(action.type || "").toLocaleLowerCase();
+      const value = textValue(action.value);
+      if (type === "openurl") {
+        const url = safeHttpUrl(value);
+        return url ? [{ title, url }] : [];
+      }
+      return [{ title, value: value || title }];
+    });
+
+  return {
+    text: activity.text?.trim() || "",
+    speak:
+      activity.speak?.trim() ||
+      (!activity.text?.trim()
+        ? activity.summary?.trim() || attachmentSpeech.join(" ")
+        : undefined) ||
+      undefined,
+    attachments: attachments.length ? attachments : undefined,
+    citations: citations.length ? citations : undefined,
+    suggestedActions: suggestedActions.length ? suggestedActions : undefined,
+  };
 }
 
 const demoQuestions = [
@@ -232,6 +409,7 @@ export class DemoAgentClient implements AgentClient {
   private readonly conversationId = crypto.randomUUID();
   private answers: string[] = [];
   private orders = initialDemoOrders.map((order) => ({ ...order }));
+  private pendingOrder?: Omit<DemoOrder, "orderNumber" | "status">;
 
   constructor(
     private readonly agent: AgentDefinition,
@@ -243,14 +421,14 @@ export class DemoAgentClient implements AgentClient {
     if (this.agent.demoKind === "orders") {
       return {
         conversationId: this.conversationId,
-        messages: [this.agent.welcomeMessage],
+        messages: [{ text: this.agent.welcomeMessage }],
       };
     }
     return {
       conversationId: this.conversationId,
-      messages: [
-        `Hi, I'm ${this.agent.displayName}, your manager handoff assistant. This is demo mode, so no Microsoft sign-in is required. ${demoQuestions[0]}`,
-      ],
+      messages: [{
+        text: `Hi, I'm ${this.agent.displayName}, your manager handoff assistant. This is demo mode, so no Microsoft sign-in is required. ${demoQuestions[0]}`,
+      }],
     };
   }
 
@@ -262,7 +440,7 @@ export class DemoAgentClient implements AgentClient {
     if (this.agent.demoKind === "orders") {
       return {
         conversationId: this.conversationId,
-        messages: [this.runOrderTool(answer)],
+        messages: [{ text: this.runOrderTool(answer) }],
       };
     }
     this.answers.push(answer);
@@ -270,14 +448,14 @@ export class DemoAgentClient implements AgentClient {
     if (nextQuestion) {
       return {
         conversationId: this.conversationId,
-        messages: [`Thank you. ${nextQuestion}`],
+        messages: [{ text: `Thank you. ${nextQuestion}` }],
       };
     }
 
     return {
       conversationId: this.conversationId,
-      messages: [
-        [
+      messages: [{
+        text: [
           this.agent.completionPhrase,
           "",
           "Manager handoff summary",
@@ -290,7 +468,7 @@ export class DemoAgentClient implements AgentClient {
             ? "Select Open self-addressed email, review the Outlook draft, and select Send."
             : "Email is not configured in demo mode.",
         ].join("\n"),
-      ],
+      }],
       emailDraft: this.emailRecipient
         ? {
             to: this.emailRecipient,
@@ -309,34 +487,49 @@ export class DemoAgentClient implements AgentClient {
   }
 
   private runOrderTool(query: string): string {
-    const orderNumber = query.match(/ORD-\d+/i)?.[0].toUpperCase();
+    const normalized = query.trim().toLocaleLowerCase();
+    if (this.pendingOrder) {
+      if (/^(?:yes|y|confirm|confirmed|place it|create it|go ahead|do it)\b/i.test(normalized)) {
+        const order: DemoOrder = {
+          ...this.pendingOrder,
+          orderNumber: `ORD-${1000 + this.orders.length + 1}`,
+          status: "Pending",
+        };
+        this.orders.push(order);
+        this.pendingOrder = undefined;
+        return [
+          this.formatOrders([order], "Order created"),
+          "This demo tool stores the order for the current session. You can continue managing orders.",
+        ].join("\n\n");
+      }
+      if (/^(?:no|n|cancel|stop|never mind|nevermind)\b/i.test(normalized)) {
+        this.pendingOrder = undefined;
+        return "I canceled that order request. What would you like to do next?";
+      }
+      return "Please confirm the pending order with “yes”, or cancel it with “no”.";
+    }
+
+    const wantsOrder = /\b(?:place|create|add|submit|new)\b.*\border\b|\border\b.*\b(?:for|of)\b/i.test(query);
+    if (wantsOrder) {
+      const parsed = this.parseOrderRequest(query);
+      if (!parsed) {
+        return "Tell me the quantity, product, and customer. For example: “Create an order for 4 Surface Laptop 7 for Contoso Retail.”";
+      }
+      this.pendingOrder = parsed;
+      return `Please confirm: ${parsed.quantity} x ${parsed.product} for ${parsed.customer}. Should I create this order?`;
+    }
+
+    const orderNumber = query.match(/\bORD[\s-]?(\d+)\b/i)?.[1];
     if (orderNumber) {
-      const order = this.orders.find((candidate) => candidate.orderNumber === orderNumber);
+      const canonicalOrderNumber = `ORD-${orderNumber}`;
+      const order = this.orders.find(
+        (candidate) => candidate.orderNumber === canonicalOrderNumber,
+      );
       return order
-        ? this.formatOrders([order], `Order ${orderNumber}`)
-        : `I couldn't find ${orderNumber}. Try another order number.`;
+        ? this.formatOrders([order], `Order ${canonicalOrderNumber}`)
+        : `I couldn't find ${canonicalOrderNumber}. Try another order number.`;
     }
 
-    const placeMatch = query.match(
-      /(?:place|create)\s+(?:an?\s+)?order\s+(?:for\s+)?(\d+)\s+(.+?)\s+for\s+(.+)/i,
-    );
-    if (placeMatch) {
-      const order: DemoOrder = {
-        orderNumber: `ORD-${1000 + this.orders.length + 1}`,
-        quantity: Number(placeMatch[1]),
-        product: placeMatch[2].trim(),
-        customer: placeMatch[3].trim(),
-        status: "Pending",
-      };
-      this.orders.push(order);
-      return [
-        this.agent.completionPhrase,
-        this.formatOrders([order], "New order"),
-        "This demo tool stores the order for the current session.",
-      ].join("\n\n");
-    }
-
-    const normalized = query.toLocaleLowerCase();
     if (normalized.includes("pending") || normalized.includes("open")) {
       return this.formatOrders(
         this.orders.filter((order) => order.status === "Pending"),
@@ -353,6 +546,29 @@ export class DemoAgentClient implements AgentClient {
       '- "Find order ORD-1002"',
       '- "Place an order for 4 Surface Laptop 7 for Contoso Retail"',
     ].join("\n");
+  }
+
+  private parseOrderRequest(
+    query: string,
+  ): Omit<DemoOrder, "orderNumber" | "status"> | undefined {
+    const patterns = [
+      /(?:place|create|add|submit)(?:\s+(?:a|an|new))?\s+order\s+(?:for|of)\s+(\d+)\s+(.+?)\s+for\s+(.+?)(?:[.!?]|$)/i,
+      /(?:place|create|add|submit)(?:\s+(?:a|an|new))?\s+order\s+for\s+(.+?),\s*(?:quantity\s*)?(\d+),?\s*(?:customer\s*)?(.+?)(?:[.!?]|$)/i,
+      /(\d+)\s+(.+?)\s+for\s+(.+?)\s+(?:please|order|ordered)?(?:[.!?]|$)/i,
+    ];
+    for (const [index, pattern] of patterns.entries()) {
+      const match = query.match(pattern);
+      if (!match) {
+        continue;
+      }
+      const quantity = Number(index === 1 ? match[2] : match[1]);
+      const product = (index === 1 ? match[1] : match[2]).trim();
+      const customer = match[3].trim();
+      if (Number.isInteger(quantity) && quantity > 0 && product && customer) {
+        return { quantity, product, customer };
+      }
+    }
+    return undefined;
   }
 
   private formatOrders(orders: DemoOrder[], heading: string): string {

@@ -2,7 +2,7 @@
 
 ## Before the call
 
-1. Open **Voice Agentsdev** in Teams.
+1. Open **Voice Agent Catalog** in Teams.
 2. Allow microphone access.
 3. Confirm **Avatar video** is on.
 4. Close any previous conversation so the app starts cleanly.

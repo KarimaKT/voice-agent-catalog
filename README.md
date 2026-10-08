@@ -8,6 +8,8 @@ catalog.
 The sample includes:
 
 - text, microphone, neural voice, and real-time avatar experiences;
+- separate user-selected spoken input and catalog-controlled output languages;
+- safe rendering for agent images, Adaptive Cards, citations, actions, and links;
 - a SharePoint-managed multi-agent catalog;
 - Teams nested app authentication and standalone browser authentication;
 - Azure App Service, Speech, Key Vault, and Application Insights infrastructure;
@@ -38,6 +40,9 @@ The sample includes:
 The complete role and reference map is in the
 [documentation hub](docs/README.md).
 
+Agent makers can start with the lightweight
+[publish checklist](README-AGENT-MAKERS.md).
+
 ## Choose a delivery channel
 
 | Channel | Best for | Distribution |
@@ -60,7 +65,9 @@ tenant distribution controls; it is not a separate Bot Framework bot.
 - End-of-turn detection and managed listen/speak/listen flow
 - Azure neural TTS
 - Optional real-time avatar with audio-only fallback
-- Agent-specific locale, voice, character, style, welcome, and completion text
+- Agent-specific output locale, voice, character, style, welcome, and completion text
+- User-selectable STT input language that defaults to the output locale
+- Agent images, Adaptive Cards, citations, suggested actions, and safe links
 - Standalone browser and Teams host support
 
 ### Deployment
@@ -174,7 +181,7 @@ boundaries, extension points, and production hardening.
 | `infra/` | Azure Bicep and deployment parameters |
 | `appPackage/` | Generic Teams manifest template and icons |
 | `copilot-studio/` | Importable agent ZIP, editable source, and maker instructions |
-| `catalog/` | SharePoint templates and Power Automate flow contract |
+| `catalog/` | SharePoint templates, audience schema, and Power Automate flow contract |
 | `.github/skills/` | Guided installation Agent Skill |
 | `docs/installer/` | Deployment and publication guide |
 | `docs/maker/` | Agent and catalog maker guide |

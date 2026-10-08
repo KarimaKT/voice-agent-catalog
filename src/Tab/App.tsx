@@ -1,25 +1,258 @@
 import React from "react";
 import * as teamsJs from "@microsoft/teams-js";
 
-import { loadAgentCatalog } from "./catalog";
+import { CatalogAccessError, loadAgentCatalog } from "./catalog";
 import {
   CopilotAgentClient,
   DemoAgentClient,
   MicrosoftIdentity,
   toSpokenText,
   type AgentClient,
+  type AgentMessage,
   type TeamsIdentityContext,
 } from "./copilot";
 import { SpeechController } from "./speech";
-import type { AgentDefinition, AppConfig, ChatMessage, TurnState } from "./types";
+import type {
+  AdaptiveCardElement,
+  AgentAction,
+  AgentAttachment,
+  AgentDefinition,
+  AppConfig,
+  ChatMessage,
+  TurnState,
+} from "./types";
 import "./App.css";
 
-function createMessage(role: ChatMessage["role"], text: string): ChatMessage {
+const inputLanguages = [
+  ["en-US", "English (United States)"],
+  ["en-GB", "English (United Kingdom)"],
+  ["es-ES", "Spanish (Spain)"],
+  ["fr-FR", "French (France)"],
+  ["de-DE", "German (Germany)"],
+  ["it-IT", "Italian (Italy)"],
+  ["pt-BR", "Portuguese (Brazil)"],
+  ["hi-IN", "Hindi (India)"],
+  ["ja-JP", "Japanese (Japan)"],
+  ["ko-KR", "Korean (Korea)"],
+  ["zh-CN", "Chinese (Mandarin, Simplified)"],
+] as const;
+
+function createMessage(
+  role: ChatMessage["role"],
+  content: string | AgentMessage,
+): ChatMessage {
+  const message = typeof content === "string" ? { text: content } : content;
   return {
     id: `${Date.now()}-${crypto.randomUUID()}`,
     role,
-    text,
+    ...message,
   };
+}
+
+function safeHttpUrl(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function cardText(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function AdaptiveCardContent({
+  elements,
+  onAction,
+}: {
+  elements: AdaptiveCardElement[];
+  onAction: (action: AgentAction) => void;
+}) {
+  return (
+    <>
+      {elements.map((element, index) => {
+        const type = cardText(element.type);
+        const key = `${type || "element"}-${index}`;
+        if (type === "TextBlock") {
+          return <p className="adaptive-text" key={key}>{cardText(element.text)}</p>;
+        }
+        if (type === "Image") {
+          const url = safeHttpUrl(element.url);
+          return url ? (
+            <img
+              className="adaptive-image"
+              key={key}
+              src={url}
+              alt={cardText(element.altText) || "Adaptive Card image"}
+              loading="lazy"
+            />
+          ) : null;
+        }
+        if (type === "FactSet" && Array.isArray(element.facts)) {
+          return (
+            <dl className="adaptive-facts" key={key}>
+              {element.facts.map((fact, factIndex) => {
+                const item = fact && typeof fact === "object"
+                  ? fact as Record<string, unknown>
+                  : {};
+                return (
+                  <React.Fragment key={`${key}-${factIndex}`}>
+                    <dt>{cardText(item.title)}</dt>
+                    <dd>{cardText(item.value)}</dd>
+                  </React.Fragment>
+                );
+              })}
+            </dl>
+          );
+        }
+        if (
+          (type === "Container" || type === "Column") &&
+          Array.isArray(element.items)
+        ) {
+          return (
+            <div className="adaptive-container" key={key}>
+              <AdaptiveCardContent elements={element.items as AdaptiveCardElement[]} onAction={onAction} />
+            </div>
+          );
+        }
+        if (type === "ColumnSet" && Array.isArray(element.columns)) {
+          return (
+            <div className="adaptive-columns" key={key}>
+              {element.columns.map((column, columnIndex) => {
+                const item = column && typeof column === "object"
+                  ? column as AdaptiveCardElement
+                  : {};
+                return (
+                  <AdaptiveCardContent
+                    key={`${key}-${columnIndex}`}
+                    elements={[item]}
+                    onAction={onAction}
+                  />
+                );
+              })}
+            </div>
+          );
+        }
+        return null;
+      })}
+    </>
+  );
+}
+
+function RichMessageContent({
+  message,
+  onAction,
+}: {
+  message: ChatMessage;
+  onAction: (action: AgentAction) => void;
+}) {
+  return (
+    <>
+      {message.text && <p>{message.text}</p>}
+      {message.attachments?.map((attachment, index) => (
+        <AttachmentContent
+          attachment={attachment}
+          key={`${attachment.kind}-${index}`}
+          onAction={onAction}
+        />
+      ))}
+      {message.citations?.length ? (
+        <div className="citations" aria-label="Sources">
+          <strong>Sources</strong>
+          <ol>
+            {message.citations.map((citation, index) => (
+              <li key={`${citation.name}-${index}`}>
+                {citation.url ? (
+                  <a href={citation.url} target="_blank" rel="noreferrer">
+                    {citation.name}
+                  </a>
+                ) : citation.name}
+                {citation.abstract && <span>{citation.abstract}</span>}
+              </li>
+            ))}
+          </ol>
+        </div>
+      ) : null}
+      {message.suggestedActions?.length ? (
+        <div className="message-actions">
+          {message.suggestedActions.map((action, index) => (
+            <button
+              className="action-button"
+              key={`${action.title}-${index}`}
+              onClick={() => onAction(action)}
+            >
+              {action.title}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function AttachmentContent({
+  attachment,
+  onAction,
+}: {
+  attachment: AgentAttachment;
+  onAction: (action: AgentAction) => void;
+}) {
+  if (attachment.kind === "image") {
+    return (
+      <figure className="message-image">
+        <img src={attachment.url} alt={attachment.alt || attachment.name || "Agent-generated image"} loading="lazy" />
+        {attachment.name && <figcaption>{attachment.name}</figcaption>}
+      </figure>
+    );
+  }
+  if (attachment.kind === "file") {
+    return (
+      <a className="file-link" href={attachment.url} target="_blank" rel="noreferrer">
+        {attachment.name}
+      </a>
+    );
+  }
+  return (
+    <section className="adaptive-card" aria-label={attachment.name || "Adaptive Card"}>
+      <AdaptiveCardContent elements={attachment.body} onAction={onAction} />
+      <div className="message-actions">
+        {attachment.actions.flatMap((rawAction, index) => {
+          const type = cardText(rawAction.type);
+          const title = cardText(rawAction.title);
+          if (!title) {
+            return [];
+          }
+          if (type === "Action.OpenUrl") {
+            const url = safeHttpUrl(rawAction.url);
+            return url ? [
+              <a className="action-button" href={url} target="_blank" rel="noreferrer" key={`${title}-${index}`}>
+                {title}
+              </a>,
+            ] : [];
+          }
+          if (type === "Action.Submit") {
+            const data = rawAction.data;
+            const value = typeof data === "string"
+              ? data
+              : data && typeof data === "object"
+                ? cardText((data as Record<string, unknown>).text) ||
+                  cardText((data as Record<string, unknown>).value)
+                : "";
+            return value ? [
+              <button className="action-button" onClick={() => onAction({ title, value })} key={`${title}-${index}`}>
+                {title}
+              </button>,
+            ] : [];
+          }
+          return [];
+        })}
+      </div>
+    </section>
+  );
 }
 
 async function loadConfig(): Promise<AppConfig> {
@@ -43,15 +276,18 @@ export default function App() {
   const [agents, setAgents] = React.useState<AgentDefinition[]>([]);
   const [selectedAgentId, setSelectedAgentId] = React.useState("");
   const [emailDraftUrl, setEmailDraftUrl] = React.useState("");
+  const [inputLanguage, setInputLanguage] = React.useState("en-US");
+  const [canManageCatalog, setCanManageCatalog] = React.useState(false);
+  const [configurationUrl, setConfigurationUrl] = React.useState("");
   const videoRef = React.useRef<HTMLVideoElement>(null);
-  const configRef = React.useRef<AppConfig>();
-  const demoEmailRecipientRef = React.useRef<string>();
-  const identityRef = React.useRef<MicrosoftIdentity>();
-  const agentClientRef = React.useRef<AgentClient>();
-  const speechRef = React.useRef<SpeechController>();
+  const configRef = React.useRef<AppConfig | undefined>(undefined);
+  const demoEmailRecipientRef = React.useRef<string | undefined>(undefined);
+  const identityRef = React.useRef<MicrosoftIdentity | undefined>(undefined);
+  const agentClientRef = React.useRef<AgentClient | undefined>(undefined);
+  const speechRef = React.useRef<SpeechController | undefined>(undefined);
   const transcriptRef = React.useRef<HTMLDivElement>(null);
   const voiceConversationActiveRef = React.useRef(false);
-  const autoSubmitTimerRef = React.useRef<ReturnType<typeof setTimeout>>();
+  const autoSubmitTimerRef = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   React.useEffect(() => {
     let disposed = false;
@@ -93,6 +329,7 @@ export default function App() {
         demoEmailRecipientRef.current = identityContext.loginHint;
         identityRef.current = new MicrosoftIdentity(config, identityContext);
         speechRef.current = new SpeechController(config.defaultAgent, videoRef.current);
+        setInputLanguage(config.defaultAgent.locale);
         setAgents(
           config.demoMode && config.demoAgents?.length
             ? config.demoAgents
@@ -131,6 +368,8 @@ export default function App() {
       return;
     }
     setState("connecting");
+    setCanManageCatalog(false);
+    setConfigurationUrl("");
     const selectedName =
       agents.find((agent) => agent.id === selectedAgentId)?.displayName ||
       config.defaultAgent.displayName;
@@ -142,8 +381,18 @@ export default function App() {
         availableAgents = config.demoAgents;
       } else {
         try {
-          availableAgents = await loadAgentCatalog(config);
+          let userEmail = identity.getBestEffortUserEmail();
+          if (config.catalogEnabled && !userEmail) {
+            userEmail = await identity.ensureUserIdentity(config.defaultAgent);
+          }
+          const catalog = await loadAgentCatalog(config, userEmail);
+          availableAgents = catalog.agents;
+          setCanManageCatalog(catalog.canManageCatalog);
+          setConfigurationUrl(catalog.configurationUrl || "");
         } catch (error) {
+          if (error instanceof CatalogAccessError) {
+            throw error;
+          }
           availableAgents = [config.defaultAgent];
           catalogNotice =
             error instanceof Error
@@ -162,6 +411,8 @@ export default function App() {
         availableAgents[0];
       setSelectedAgentId(selected.id);
       await speechRef.current?.setAgent(selected);
+      setInputLanguage(selected.locale);
+      speechRef.current?.setInputLanguage(selected.locale);
       setAvatarVisible(false);
       agentClientRef.current = config.demoMode
         ? new DemoAgentClient(selected, demoEmailRecipientRef.current)
@@ -170,14 +421,18 @@ export default function App() {
       const welcome =
         turn.messages.length > 0
           ? turn.messages
-          : [selected.welcomeMessage];
+          : [{ text: selected.welcomeMessage }];
       setMessages([
         ...(catalogNotice ? [createMessage("system", catalogNotice)] : []),
-        ...welcome.map((text) => createMessage("agent", text)),
+        ...welcome.map((message) => createMessage("agent", message)),
       ]);
       setState("ready");
       setStatus(`${selected.displayName} is ready`);
-      await speakMessages(welcome);
+      await speakMessages(
+        welcome
+          .map((message) => message.speak || toSpokenText(message.text))
+          .filter(Boolean),
+      );
     } catch (error) {
       handleError(error, `Could not connect to ${selectedName}.`);
     }
@@ -211,11 +466,11 @@ export default function App() {
         "";
 
       for (const reply of turn.messages) {
-        completed ||= reply
+        completed ||= reply.text
           .toLocaleLowerCase()
           .includes(completionPhrase.toLocaleLowerCase());
         nextMessages.push(createMessage("agent", reply));
-        const speech = toSpokenText(reply);
+        const speech = reply.speak || toSpokenText(reply.text);
         if (speech) {
           spoken.push(speech);
         }
@@ -376,6 +631,8 @@ export default function App() {
     const selected = agents.find((agent) => agent.id === agentId);
     if (selected) {
       await speechRef.current?.setAgent(selected);
+      setInputLanguage(selected.locale);
+      speechRef.current?.setInputLanguage(selected.locale);
     }
     setState("ready");
     setStatus(selected ? `Ready to connect to ${selected.displayName}` : "Ready to connect");
@@ -385,12 +642,24 @@ export default function App() {
   const busy = state === "connecting" || state === "thinking" || state === "speaking";
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) || agents[0];
 
+  function handleAgentAction(action: AgentAction): void {
+    if (action.url) {
+      window.open(action.url, "_blank", "noopener,noreferrer");
+      return;
+    }
+    if (action.value) {
+      void sendMessage(action.value);
+    }
+  }
+
   return (
     <main className="app-shell">
       <header className="app-header">
         <div>
-          <p className="eyebrow">Voice-enabled Copilot Studio</p>
-          <h1>{selectedAgent ? `Meet ${selectedAgent.displayName}` : "Voice interviews"}</h1>
+          <p className="eyebrow">
+            {selectedAgent ? `Meet ${selectedAgent.displayName}` : "Voice-enabled Copilot Studio"}
+          </p>
+          <h1>Voice Agent Catalog</h1>
           <p className="subtitle">
             {selectedAgent?.description || "A short guided interview with voice and avatar."}
           </p>
@@ -422,6 +691,29 @@ export default function App() {
                 ))}
               </select>
             </label>
+            <label className="agent-picker">
+              <span>Spoken input</span>
+              <select
+                value={inputLanguage}
+                onChange={(event) => {
+                  setInputLanguage(event.target.value);
+                  speechRef.current?.setInputLanguage(event.target.value);
+                }}
+                disabled={busy || state === "listening"}
+              >
+                {!inputLanguages.some(([locale]) => locale === inputLanguage) && (
+                  <option value={inputLanguage}>{inputLanguage}</option>
+                )}
+                {inputLanguages.map(([locale, label]) => (
+                  <option value={locale} key={locale}>{label}</option>
+                ))}
+              </select>
+            </label>
+            {canManageCatalog && configurationUrl && (
+              <a className="catalog-admin-link" href={configurationUrl} target="_blank" rel="noreferrer">
+                Manage catalog
+              </a>
+            )}
           </div>
 
           <div className="transcript" ref={transcriptRef} aria-live="polite">
@@ -454,7 +746,7 @@ export default function App() {
                       ? "You"
                       : "Status"}
                 </span>
-                <p>{message.text}</p>
+                <RichMessageContent message={message} onAction={handleAgentAction} />
               </article>
             ))}
 
@@ -579,7 +871,7 @@ export default function App() {
             {selectedAgent && (
               <p className="agent-identity">
                 Voice: {selectedAgent.voiceName} · Avatar: {selectedAgent.avatarCharacter} (
-                {selectedAgent.avatarStyle})
+                {selectedAgent.avatarStyle}) · Output: {selectedAgent.locale} · Input: {inputLanguage}
               </p>
             )}
           </div>

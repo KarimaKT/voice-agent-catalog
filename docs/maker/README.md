@@ -25,6 +25,8 @@ Makers own:
 - Outlook or other connector actions;
 - SharePoint catalog rows;
 - locale, voice, avatar character, and avatar style; and
+- catalog audience (`Everyone` or direct-user `Restricted`) and optional
+  harness metadata; and
 - publication of draft agent changes.
 
 Changing a catalog row does not require rebuilding or reinstalling the Teams
@@ -93,13 +95,32 @@ Add one enabled row to the SharePoint catalog:
 | `Enabled` | Whether the app displays the agent |
 | `CompletionPhrase` | Exact successful completion sentence |
 | `WelcomeMessage` | Fallback first message |
-| `Locale` | Speech recognition and synthesis locale |
+| `Locale` | Agent output, TTS, and avatar locale |
 | `VoiceName` | Azure neural voice name |
 | `AvatarCharacter` | Azure standard avatar character |
 | `AvatarStyle` | Style supported by the selected character |
+| `Audience` | `Everyone` or `Restricted` dropdown visibility |
+| `AllowedUsers` | Direct people-picker users for a restricted row |
+| `Harness` | Optional, future-ready harness metadata |
 
 See [catalog administration](../../catalog/README.md) and the sample
-`catalog/Pat Agent Catalog.csv`.
+`catalog/Voice Agent Catalog.csv`.
+
+`Locale` controls agent output, TTS, and avatar speech. Users choose a separate
+spoken input language for STT; it defaults to `Locale`. Instruct the agent to
+always answer in the configured output language, even when the user types or
+speaks another language.
+
+Audience filtering improves the dropdown experience only. The app backend
+passes a best-effort user email to the maker flow, which can filter direct
+`AllowedUsers` entries and return `canManageCatalog` plus a configuration URL
+for catalog/site administrators. **Copilot Studio sharing and runtime
+authorization remain the final security boundary.**
+
+The current Direct Line/Agents SDK live transport is verified only for the
+standard Copilot Studio harness. GitHub Copilot/Copilot Chat harnesses do not
+currently support this transport. Keep `Harness` optional and do not reject
+unknown values so future transports can be added without a list migration.
 
 ## Choose a voice
 
@@ -146,6 +167,8 @@ For every agent:
 6. verify spoken responses are short enough for voice use;
 7. publish the draft; and
 8. test as a nonauthor user who has only runtime access.
+9. verify restricted rows are hidden for a nonallowed user without treating
+   that filtering as an authorization test.
 
 For Pat, confirm exactly one formatted HTML email is delivered.
 

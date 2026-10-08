@@ -1,10 +1,10 @@
 {
     "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.26/MicrosoftTeams.schema.json",
     "manifestVersion": "1.26",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "id": "${{TEAMS_APP_ID}}",
     "developer": {
-        "name": "Voice Agent Catalog Sample",
+        "name": "Voice Agent Catalog",
         "websiteUrl": "${{TAB_ENDPOINT}}",
         "privacyUrl": "${{TAB_ENDPOINT}}/privacy",
         "termsOfUseUrl": "${{TAB_ENDPOINT}}/terms"
@@ -14,8 +14,8 @@
         "outline": "outline.png"
     },
     "name": {
-        "short": "Voice Agents${{APP_NAME_SUFFIX}}",
-        "full": "Voice Agent Catalog Sample"
+        "short": "Voice Agent Catalog",
+        "full": "Voice Agent Catalog"
     },
     "description": {
         "short": "Talk with catalog-managed Copilot agents.",
@@ -27,7 +27,7 @@
     "staticTabs": [
         {
             "entityId": "index0",
-            "name": "Voice agents",
+            "name": "Voice Agent Catalog",
             "contentUrl": "${{TAB_ENDPOINT}}/tabs/home",
             "websiteUrl": "${{TAB_ENDPOINT}}/tabs/home",
             "scopes": [

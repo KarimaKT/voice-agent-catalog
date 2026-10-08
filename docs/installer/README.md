@@ -185,6 +185,12 @@ npx -y --package @microsoft/m365agentstoolkit-cli atk deploy `
 Provisioning creates or updates App Service, Speech, Key Vault, Application
 Insights, Log Analytics, Entra, and the Teams app registration.
 
+The product and Teams UX name is **Voice Agent Catalog**. For an existing
+installation, keep the generated `TEAMS_APP_ID`, Entra client/object IDs, and
+resource identifiers in the environment files and rerun provisioning so the
+manifest updates in place. Do not delete and recreate registrations merely to
+apply the name.
+
 ## Use the standalone web application
 
 Open the deployed endpoint in a supported browser:

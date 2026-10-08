@@ -133,7 +133,8 @@ Collect or discover these values:
 
 ### Speech identity
 
-- Recognition/synthesis locale.
+- Output/synthesis locale.
+- Supported spoken-input languages (input defaults to output locale).
 - Azure neural voice name.
 - Avatar character.
 - Avatar style supported by that character.
@@ -232,7 +233,7 @@ Record the published environment ID and schema name locally.
 
 ## Phase 4: SharePoint agent catalog
 
-Create the list from `catalog/Pat Agent Catalog.csv` on the selected SharePoint
+Create the list from `catalog/Voice Agent Catalog.csv` on the selected SharePoint
 site, or update an existing compatible list. The required display-name columns
 are:
 
@@ -247,20 +248,33 @@ are:
 - `VoiceName`
 - `AvatarCharacter`
 - `AvatarStyle`
+- `Audience`
+- `AllowedUsers`
+- `Harness` (optional)
 
 Do not assume SharePoint internal field names equal display names. CSV import
 can produce names such as `field_1`; map Power Automate **Select** keys with the
 SharePoint dynamic-content labels.
 
 Create or update one enabled row for the published agent. Apply the selected
-locale, voice, avatar character, and avatar style. Grant the flow maker read
-access and catalog maintainers edit access.
+output locale, voice, avatar character, avatar style, and audience. Configure
+`AllowedUsers` as a multi-value people-only Person or Group column. Grant the
+flow maker read access and catalog maintainers edit access.
 
-Read the row back and verify all eleven fields before continuing.
+Read the row back and verify all required fields before continuing.
 
 Create the maker-owned flow exactly as documented in
 `catalog/power-automate-flow.md`. Save it, copy the signed trigger URL, and test
-that it returns an `agents` array. Treat the URL as a secret.
+that it returns a user-filtered `agents` array. The app passes a best-effort
+email for dropdown UX, but Copilot Studio sharing is the final security
+boundary. Have the flow return `canManageCatalog` and `configurationUrl` only
+for catalog/site administrators; never expose the list URL through a public app
+environment variable. Treat the signed trigger URL as a secret.
+
+The current live Direct Line/Agents SDK transport is verified only for the
+standard harness. GitHub Copilot/Copilot Chat harnesses do not currently
+support that transport. Keep the optional Harness value future-ready and do not
+reject unknown values.
 
 ## Phase 5: Local environment
 
@@ -413,7 +427,9 @@ Verify all of these:
 8. Agent dropdown and catalog identity are correct.
 9. Typed conversation reaches the published agent, or completes the clearly
    labeled local four-question flow when `DEMO_MODE=true`.
-10. STT recognizes microphone input using the selected locale.
+10. STT recognizes microphone input using the user's selected input language,
+    which defaults to the catalog output locale. TTS and agent output use the
+    catalog `Locale`.
     Verify managed voice mode starts with one action, submits after end-of-turn
     silence, pauses while the agent speaks, reopens automatically afterward,
     and stops when **Stop conversation** is selected.
@@ -427,6 +443,11 @@ Verify all of these:
 15. Application Insights contains health and failure telemetry but no transcript
     or generated HTML content.
 16. Managed-identity Key Vault access is present in live Azure state.
+17. Agent-generated images, Adaptive Cards, citations, suggested actions, and
+    safe HTTP(S) file links render without unsafe HTML; text and narration
+    remain available.
+18. Restricted catalog rows follow direct `AllowedUsers` filtering, and only
+    catalog/site administrators see the flow-provided configuration link.
 
 If any check fails, fix the root cause and repeat the smallest relevant
 provision, deploy, or verification step.

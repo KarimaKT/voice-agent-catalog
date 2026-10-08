@@ -20,6 +20,8 @@ interface RateLimitEntry {
 
 interface CatalogFlowResponse {
   agents?: unknown[];
+  canManageCatalog?: unknown;
+  configurationUrl?: unknown;
 }
 
 if (process.env.APPLICATIONINSIGHTS_CONNECTION_STRING) {
@@ -41,6 +43,26 @@ const defaultCompletionPhrase =
 const defaultWelcomeMessage =
   "Hi, I'm Pat, an AI assistant to your manager. I'll ask four short questions and email your manager a handoff summary. What is your name and role?";
 
+function normalizeEmail(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const email = value.trim().toLocaleLowerCase();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : undefined;
+}
+
+function safeHttpUrl(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.toString() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function getEnvironment(name: (typeof requiredEnvironment)[number]): string {
   const value = process.env[name]?.trim();
   if (!value) {
@@ -61,7 +83,7 @@ const adapter = secureServer
   : new ExpressAdapter();
 adapter.use((_request: Request, response: Response, next: NextFunction) => {
   response.removeHeader("X-Powered-By");
-  response.setHeader("Content-Security-Policy", "default-src 'self'; connect-src 'self' https://login.microsoftonline.com https://res.cdn.office.net https://api.powerplatform.com https://*.api.powerplatform.com https://*.environment.api.powerplatform.com https://*.cognitiveservices.azure.com https://*.speech.microsoft.com wss://*.speech.microsoft.com; frame-ancestors https://teams.microsoft.com https://*.teams.microsoft.com https://*.cloud.microsoft; img-src 'self' data: blob:; media-src 'self' blob:; script-src 'self'; style-src 'self' 'unsafe-inline'");
+  response.setHeader("Content-Security-Policy", "default-src 'self'; connect-src 'self' https://login.microsoftonline.com https://res.cdn.office.net https://api.powerplatform.com https://*.api.powerplatform.com https://*.environment.api.powerplatform.com https://*.cognitiveservices.azure.com https://*.speech.microsoft.com wss://*.speech.microsoft.com; frame-ancestors https://teams.microsoft.com https://*.teams.microsoft.com https://*.cloud.microsoft; img-src 'self' https: data: blob:; media-src 'self' blob:; script-src 'self'; style-src 'self' 'unsafe-inline'");
   response.setHeader("Referrer-Policy", "no-referrer");
   response.setHeader("X-Content-Type-Options", "nosniff");
   next();
@@ -137,6 +159,8 @@ adapter.get("/api/config", (_request: Request, response: Response) => {
         process.env.SPEECH_VOICE_NAME?.trim() || "en-US-AvaMultilingualNeural",
       avatarCharacter: process.env.AVATAR_CHARACTER?.trim() || "lisa",
       avatarStyle: process.env.AVATAR_STYLE?.trim() || "casual-sitting",
+      audience: "Everyone",
+      harness: "standard",
       demoKind: "interview",
     };
     const catalogFlowUrl = process.env.CATALOG_FLOW_URL?.trim();
@@ -175,7 +199,7 @@ adapter.get("/api/config", (_request: Request, response: Response) => {
   }
 });
 
-adapter.get("/api/catalog", async (_request: Request, response: Response) => {
+adapter.get("/api/catalog", async (request: Request, response: Response) => {
   const catalogFlowUrl = process.env.CATALOG_FLOW_URL?.trim();
   if (!catalogFlowUrl || catalogFlowUrl.toLowerCase() === "disabled") {
     response.status(404).json({ error: "The shared agent catalog is not configured." });
@@ -183,13 +207,17 @@ adapter.get("/api/catalog", async (_request: Request, response: Response) => {
   }
 
   try {
+    const userEmail = normalizeEmail(request.header("X-Voice-Catalog-User"));
     const flowResponse = await fetch(catalogFlowUrl, {
       method: "POST",
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ operation: "listEnabledAgents" }),
+      body: JSON.stringify({
+        operation: "listEnabledAgents",
+        userEmail,
+      }),
       signal: AbortSignal.timeout(20_000),
     });
     if (!flowResponse.ok) {
@@ -200,8 +228,15 @@ adapter.get("/api/catalog", async (_request: Request, response: Response) => {
       throw new Error("Catalog flow returned an invalid response");
     }
 
+    const canManageCatalog = payload.canManageCatalog === true;
     response.setHeader("Cache-Control", "no-store");
-    response.json({ agents: payload.agents });
+    response.json({
+      agents: payload.agents,
+      canManageCatalog,
+      configurationUrl: canManageCatalog
+        ? safeHttpUrl(payload.configurationUrl)
+        : undefined,
+    });
   } catch (error) {
     logger.error(error instanceof Error ? error.message : "Unable to load agent catalog");
     response.status(502).json({ error: "The shared agent catalog is temporarily unavailable." });
@@ -274,11 +309,11 @@ adapter.post("/api/speech/token", async (_request: Request, response: Response) 
 });
 
 adapter.get("/privacy", (_request: Request, response: Response) => {
-  response.type("html").send("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Voice Agent Privacy</title></head><body><main><h1>Voice Agent privacy</h1><p>This proof of concept sends conversation messages to the selected Copilot Studio agent and uses Azure Speech for optional voice and avatar features. It does not intentionally persist conversation transcripts in this application.</p></main></body></html>");
+  response.type("html").send("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Voice Agent Catalog Privacy</title></head><body><main><h1>Voice Agent Catalog privacy</h1><p>This proof of concept sends conversation messages to the selected Copilot Studio agent and uses Azure Speech for optional voice and avatar features. It does not intentionally persist conversation transcripts in this application.</p></main></body></html>");
 });
 
 adapter.get("/terms", (_request: Request, response: Response) => {
-  response.type("html").send("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Voice Agent Terms</title></head><body><main><h1>Voice Agent terms</h1><p>This application is a proof of concept for authorized demonstration users. Do not submit sensitive personal, medical, legal, compensation, or confidential production information.</p></main></body></html>");
+  response.type("html").send("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Voice Agent Catalog Terms</title></head><body><main><h1>Voice Agent Catalog terms</h1><p>This application is a proof of concept for authorized demonstration users. Do not submit sensitive personal, medical, legal, compensation, or confidential production information.</p></main></body></html>");
 });
 
 app.tab("home", path.join(__dirname, "./client"));

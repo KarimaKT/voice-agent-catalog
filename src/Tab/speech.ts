@@ -14,12 +14,13 @@ async function getCredentials(): Promise<SpeechCredentials> {
 function createSpeechConfig(
   credentials: SpeechCredentials,
   agent: AgentDefinition,
+  recognitionLanguage: string,
 ): SpeechSDK.SpeechConfig {
   const speechConfig = SpeechSDK.SpeechConfig.fromAuthorizationToken(
     credentials.token,
     credentials.region,
   );
-  speechConfig.speechRecognitionLanguage = agent.locale;
+  speechConfig.speechRecognitionLanguage = recognitionLanguage;
   speechConfig.speechSynthesisLanguage = agent.locale;
   speechConfig.speechSynthesisVoiceName = agent.voiceName;
   return speechConfig;
@@ -31,11 +32,14 @@ export class SpeechController {
   private avatarSynthesizer?: SpeechSDK.AvatarSynthesizer;
   private peerConnection?: RTCPeerConnection;
   private finalSegments: string[] = [];
+  private recognitionLanguage: string;
 
   constructor(
     private agent: AgentDefinition,
     private readonly video: HTMLVideoElement,
-  ) {}
+  ) {
+    this.recognitionLanguage = agent.locale;
+  }
 
   async setAgent(agent: AgentDefinition): Promise<void> {
     const profileChanged =
@@ -49,6 +53,10 @@ export class SpeechController {
     this.agent = agent;
   }
 
+  setInputLanguage(locale: string): void {
+    this.recognitionLanguage = locale;
+  }
+
   async startListening(
     onInterim: (text: string) => void,
     onFinal: (text: string) => void,
@@ -57,7 +65,11 @@ export class SpeechController {
     await this.stopSpeaking();
     await this.stopListening();
     const credentials = await getCredentials();
-    const speechConfig = createSpeechConfig(credentials, this.agent);
+    const speechConfig = createSpeechConfig(
+      credentials,
+      this.agent,
+      this.recognitionLanguage,
+    );
     const audioConfig = SpeechSDK.AudioConfig.fromDefaultMicrophoneInput();
     this.finalSegments = [];
     this.recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
@@ -104,7 +116,11 @@ export class SpeechController {
     }
     await this.stopSpeaking();
     const credentials = await getCredentials();
-    const speechConfig = createSpeechConfig(credentials, this.agent);
+    const speechConfig = createSpeechConfig(
+      credentials,
+      this.agent,
+      this.recognitionLanguage,
+    );
 
     if (avatarEnabled) {
       await this.speakWithAvatar(text, credentials, speechConfig);

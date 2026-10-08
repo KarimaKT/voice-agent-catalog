@@ -33,7 +33,7 @@ repository.
 
 ## 3. Create the catalog
 
-Create a Microsoft List from `catalog/Pat Agent Catalog.csv`. Replace placeholder
+Create a Microsoft List from `catalog/Voice Agent Catalog.csv`. Replace placeholder
 agent identifiers and apply the selected voice/avatar values. Grant users read
 access and maintainers edit access.
 

@@ -14,7 +14,8 @@ until reconnect; new connections omit the agent.
 
 ### Change voice or avatar
 
-Edit `Locale`, `VoiceName`, `AvatarCharacter`, and `AvatarStyle`. Selecting the
+Edit output `Locale`, `VoiceName`, `AvatarCharacter`, and `AvatarStyle`. The
+user chooses the STT input language separately in the app. Selecting the
 agent recreates the avatar session when the profile changed.
 
 ## Health checks
