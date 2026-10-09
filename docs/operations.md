@@ -108,10 +108,11 @@ If `/api/speech/token` returns 502:
 Avatar relay failure falls back to audio-only TTS. Basic TTS/STT can still work
 when real-time avatar relay is unavailable.
 
-Audio-only mode waits for the SDK speaker's playback-end event before reopening
+Audio-only mode waits for the browser audio element's playback-end event before reopening
 recognition, not merely the service's synthesis-completed callback. Stop pauses
-the speaker and releases that wait. Keep the SDK's default WAV playback format;
-streaming MP3 Media Source playback can stall without delivering playback-end.
+the speaker and releases that wait. Audio-only output explicitly uses RIFF WAV
+with native browser playback; the SDK's streaming player can stall without
+delivering playback-end. Temporary audio URLs are revoked on completion or Stop.
 CSP permits the Speech SDK's data/blob
 workers separately; page scripts remain restricted to the same origin.
 
