@@ -277,6 +277,22 @@ or assignment policies.
 
 Do not commit generated tenant-specific Teams packages.
 
+### Pilot while organizational approval is pending
+
+Share the standalone HTTPS URL with a few same-tenant testers. Publish/share
+the selected Copilot Studio agent with those people separately. If the catalog
+row uses **Restricted**, add the same direct users to **AllowedUsers**; catalog
+visibility does not itself grant agent access.
+
+Testers can install the ZIP personally only when their existing Teams policy
+allows custom app upload. Otherwise use the standalone app while the tenant
+administrator reviews the submission. Approval does not bypass Entra consent,
+Copilot Studio sharing, licensing or Teams app policies.
+
+Use nonsensitive answers, permit microphone access when prompted, and check
+each tester's actual headset and voice start/stop before the demo. Azure Speech
+and avatar usage remain billable while using either channel.
+
 ## Verify the installation
 
 Verify:

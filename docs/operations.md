@@ -110,7 +110,9 @@ when real-time avatar relay is unavailable.
 
 Audio-only mode waits for the SDK speaker's playback-end event before reopening
 recognition, not merely the service's synthesis-completed callback. Stop pauses
-the speaker and releases that wait. CSP permits the Speech SDK's data/blob
+the speaker and releases that wait. Keep the SDK's default WAV playback format;
+streaming MP3 Media Source playback can stall without delivering playback-end.
+CSP permits the Speech SDK's data/blob
 workers separately; page scripts remain restricted to the same origin.
 
 ## Deployment troubleshooting

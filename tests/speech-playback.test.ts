@@ -34,7 +34,6 @@ function speechHarness() {
     fetch: async () => ({ ok: true, json: async () => ({ token: "test-token", region: "test-region" }) }),
     SpeechSDK: {
       SpeechConfig: { fromAuthorizationToken: () => ({}) },
-      SpeechSynthesisOutputFormat: { Audio24Khz48KBitRateMonoMp3: 1 },
       SpeakerAudioDestination: Player,
       AudioConfig: { fromSpeakerOutput: (player: Player) => player },
       SpeechSynthesizer: Synthesizer,

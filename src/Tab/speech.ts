@@ -133,8 +133,6 @@ export class SpeechController {
       return;
     }
 
-    speechConfig.speechSynthesisOutputFormat =
-      SpeechSDK.SpeechSynthesisOutputFormat.Audio24Khz48KBitRateMonoMp3;
     const speaker = new SpeechSDK.SpeakerAudioDestination();
     this.speaker = speaker;
     const audioConfig = SpeechSDK.AudioConfig.fromSpeakerOutput(speaker);
