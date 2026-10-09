@@ -56,6 +56,9 @@ peer connection, received tracks and timers. Exercise late startup, media failur
 and the exact 30-second startup/120-second speech watchdog thresholds without
 making billable Speech or Copilot requests. Verify text-only defaults, upfront
 cost notices, and audio-only narration of terminal messages.
+Assert one avatar startup/peer is reused across replies, verify each 15/34/45
+second idle setting, and prove agent processing and playback suspend idle cleanup.
+Idle expiry must retain the agent conversation and allow a later video reconnect.
 
 ## Privacy defaults
 

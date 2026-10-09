@@ -19,6 +19,7 @@ import type {
   AgentAction,
   AgentAttachment,
   AgentDefinition,
+  AvatarIdleTimeoutSeconds,
   AppConfig,
   ChatMessage,
   TurnState,
@@ -169,6 +170,7 @@ export default function App() {
   const [status, setStatus] = React.useState("Preparing the app...");
   const [avatarEnabled, setAvatarEnabled] = React.useState(false);
   const [readRepliesAloud, setReadRepliesAloud] = React.useState(false);
+  const [avatarIdleSeconds, setAvatarIdleSeconds] = React.useState<AvatarIdleTimeoutSeconds>(34);
   const [costNotices, setCostNotices] = React.useState<AppConfig["costNotices"]>();
   const [avatarVisible, setAvatarVisible] = React.useState(false);
   const [voiceConversationActive, setVoiceConversationActive] = React.useState(false);
@@ -237,6 +239,10 @@ export default function App() {
           config.defaultAgent,
           videoRef.current,
           () => identity.acquireApiToken(),
+          (message) => {
+            setAvatarVisible(false);
+            setMessages((current) => [...current, createMessage("system", message)]);
+          },
         );
         setInputLanguage(config.defaultAgent.locale);
         const initialAgents = config.demoMode ? config.demoAgents || [] : [];
@@ -396,6 +402,7 @@ export default function App() {
       return;
     }
     turnInFlightRef.current = true;
+    speechRef.current?.setAgentWorking(true);
     const epoch = sessionEpochRef.current;
     const client = agentClientRef.current;
     if (autoSubmitTimerRef.current) {
@@ -462,6 +469,7 @@ export default function App() {
       handleError(error, `${selectedAgent?.displayName || "The agent"} could not complete that turn.`);
     } finally {
       turnInFlightRef.current = false;
+      speechRef.current?.setAgentWorking(false);
     }
   }
 
@@ -753,8 +761,9 @@ export default function App() {
             <small>
               Estimates, not a live bill. Hosting, Copilot Studio and licensing are additional.
               Charges go to the deployment owner's services. Text-only mode uses no Speech.
-              Avatar connects only for a reply in an active Copilot Studio conversation and
-              disconnects after that reply.
+              Avatar is reused during an active Copilot Studio conversation and disconnects
+              after the selected idle period. The idle timer pauses while the agent works
+              or speaks; connected waiting time remains billable.
             </small>
           </section>
           <div className="transcript" ref={transcriptRef} aria-live="polite">
@@ -813,7 +822,10 @@ export default function App() {
             <textarea
               id="answer"
               value={draft}
-              onChange={(event) => setDraft(event.target.value)}
+              onChange={(event) => {
+                setDraft(event.target.value);
+                speechRef.current?.noteUserActivity();
+              }}
               placeholder={
                 connected
                   ? "Type a message or use the microphone..."
@@ -916,12 +928,37 @@ export default function App() {
             </label>
             <button
               className="text-button"
-              onClick={() => void speechRef.current?.stopSpeaking()}
+              onClick={() => void speechRef.current?.stopSpeaking().catch(reportCleanupError)}
               disabled={state !== "speaking"}
             >
               Stop speaking
             </button>
           </div>
+
+          <label className="agent-picker">
+            <span>Avatar idle timeout</span>
+            <select
+              value={avatarIdleSeconds}
+              disabled={!costNotices}
+              onChange={(event) => {
+                const seconds = Number(event.target.value);
+                if (seconds !== 15 && seconds !== 34 && seconds !== 45) {
+                  handleError(new Error("Choose 15, 34 or 45 seconds."), "Invalid avatar timeout.");
+                  return;
+                }
+                speechRef.current?.setAvatarIdleTimeout(seconds);
+                setAvatarIdleSeconds(seconds);
+              }}
+            >
+              <option value={15}>15 seconds</option>
+              <option value={34}>34 seconds</option>
+              <option value={45}>45 seconds</option>
+            </select>
+            <small>
+              Only counts idle time waiting for you, not agent processing or spoken replies.
+              Stops video only; the next reply can reconnect it.
+            </small>
+          </label>
 
           <div className="privacy-note">
             <h3>You stay in control</h3>

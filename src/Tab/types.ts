@@ -16,6 +16,8 @@ export interface AgentDefinition {
   demoKind?: "interview" | "orders";
 }
 
+export type AvatarIdleTimeoutSeconds = 15 | 34 | 45;
+
 export interface AppConfig {
   tenantId: string;
   clientId: string;

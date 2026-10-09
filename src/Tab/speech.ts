@@ -1,6 +1,6 @@
 import * as SpeechSDK from "microsoft-cognitiveservices-speech-sdk";
 
-import type { AgentDefinition, SpeechCredentials } from "./types";
+import type { AgentDefinition, AvatarIdleTimeoutSeconds, SpeechCredentials } from "./types";
 
 async function getCredentials(accessToken: string): Promise<SpeechCredentials> {
   const response = await fetch("/api/speech/token", {
@@ -42,11 +42,16 @@ export class SpeechController {
   private conversationActive = false;
   private avatarGeneration = 0;
   private cancelAvatar?: () => void;
+  private avatarIdleSeconds: AvatarIdleTimeoutSeconds = 34;
+  private avatarIdleTimer?: ReturnType<typeof setTimeout>;
+  private avatarBusy = false;
+  private agentWorking = false;
 
   constructor(
     private agent: AgentDefinition,
     private readonly video: HTMLVideoElement,
     private readonly getApiAccessToken: () => Promise<string>,
+    private readonly onAvatarNotice: (message: string) => void = () => {},
   ) {
     this.recognitionLanguage = agent.locale;
   }
@@ -72,6 +77,47 @@ export class SpeechController {
     if (!active) await this.close();
   }
 
+  setAvatarIdleTimeout(seconds: AvatarIdleTimeoutSeconds): void {
+    if (seconds !== 15 && seconds !== 34 && seconds !== 45) {
+      throw new Error("Avatar idle timeout must be 15, 34 or 45 seconds.");
+    }
+    this.avatarIdleSeconds = seconds;
+    this.resetAvatarIdleTimer();
+  }
+
+  setAgentWorking(working: boolean): void {
+    this.agentWorking = working;
+    this.resetAvatarIdleTimer();
+  }
+
+  noteUserActivity(): void {
+    this.resetAvatarIdleTimer();
+  }
+
+  private resetAvatarIdleTimer(): void {
+    if (this.avatarIdleTimer !== undefined) clearTimeout(this.avatarIdleTimer);
+    this.avatarIdleTimer = undefined;
+    if (!this.conversationActive || !this.avatarSynthesizer ||
+        this.avatarBusy || this.agentWorking) return;
+    const seconds = this.avatarIdleSeconds;
+    const timer = setTimeout(() => {
+      if (this.avatarIdleTimer !== timer) return;
+      this.avatarIdleTimer = undefined;
+      if (this.agentWorking || this.avatarBusy) {
+        this.resetAvatarIdleTimer();
+        return;
+      }
+      void this.closeAvatar().then(() => {
+        if (!this.avatarSynthesizer) {
+          this.onAvatarNotice(`Avatar disconnected after ${seconds} seconds idle to save cost. It will reopen for the next reply.`);
+        }
+      }).catch((error: unknown) => {
+        this.onAvatarNotice(error instanceof Error ? `Avatar cleanup: ${error.message}` : "Avatar cleanup failed.");
+      });
+    }, seconds * 1000);
+    this.avatarIdleTimer = timer;
+  }
+
   async stopAvatar(): Promise<void> {
     this.speakingGeneration++;
     await this.closeAvatar();
@@ -82,6 +128,7 @@ export class SpeechController {
     onFinal: (text: string) => void,
     onError: (message: string) => void,
   ): Promise<void> {
+    this.noteUserActivity();
     const generation = ++this.listeningGeneration;
     await this.stopSpeaking();
     if (generation !== this.listeningGeneration) return;
@@ -99,12 +146,14 @@ export class SpeechController {
 
     this.recognizer.recognizing = (_sender, event) => {
       if (generation !== this.listeningGeneration) return;
+      this.noteUserActivity();
       onInterim([...this.finalSegments, event.result.text].filter(Boolean).join(" "));
     };
     this.recognizer.recognized = (_sender, event) => {
       if (generation !== this.listeningGeneration) return;
       const text = event.result.text.trim();
       if (text) {
+        this.noteUserActivity();
         this.finalSegments.push(text);
         onFinal(this.finalSegments.join(" "));
       }
@@ -212,17 +261,23 @@ export class SpeechController {
 
   async stopSpeaking(): Promise<void> {
     this.speakingGeneration++;
+    this.cancelAvatar?.();
+    if (this.avatarBusy && this.avatarSynthesizer) {
+      await this.avatarSynthesizer.stopSpeakingAsync();
+    }
     this.finishPlayback?.();
     this.finishPlayback = undefined;
     this.synthesizer?.close();
     this.synthesizer = undefined;
-    await this.closeAvatar();
   }
 
   async close(): Promise<void> {
     this.conversationActive = false;
     this.speakingGeneration++;
-    const results = await Promise.allSettled([this.stopSpeaking(), this.stopListening()]);
+    this.agentWorking = false;
+    const results = await Promise.allSettled([
+      this.closeAvatar(), this.stopSpeaking(), this.stopListening(),
+    ]);
     for (const result of results) {
       if (result.status === "rejected") throw result.reason;
     }
@@ -230,6 +285,9 @@ export class SpeechController {
 
   private async closeAvatar(): Promise<void> {
     this.avatarGeneration++;
+    if (this.avatarIdleTimer !== undefined) clearTimeout(this.avatarIdleTimer);
+    this.avatarIdleTimer = undefined;
+    this.avatarBusy = false;
     this.cancelAvatar?.();
     this.cancelAvatar = undefined;
     const avatar = this.avatarSynthesizer;
@@ -251,24 +309,36 @@ export class SpeechController {
     speechConfig: SpeechSDK.SpeechConfig,
     generation: number,
   ): Promise<void> {
-    if (!credentials.relay) {
-      throw new Error("Avatar relay credentials are unavailable.");
-    }
-
     const avatarGeneration = this.avatarGeneration;
+    this.avatarBusy = true;
+    this.resetAvatarIdleTimer();
+    let succeeded = false;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
-      const peer = new RTCPeerConnection({
-        iceServers: [{
-          urls: [credentials.relay.url],
-          username: credentials.relay.username,
-          credential: credentials.relay.credential,
-        }],
-      });
-      this.peerConnection = peer;
+      let peer = this.peerConnection;
+      let avatar = this.avatarSynthesizer;
+      const needsStartup = !peer || !avatar;
+      if (!peer || !avatar) {
+        if (!credentials.relay) throw new Error("Avatar relay credentials are unavailable.");
+        peer = new RTCPeerConnection({
+          iceServers: [{
+            urls: [credentials.relay.url],
+            username: credentials.relay.username,
+            credential: credentials.relay.credential,
+          }],
+        });
+        this.peerConnection = peer;
+        peer.addTransceiver("video", { direction: "recvonly" });
+        peer.addTransceiver("audio", { direction: "recvonly" });
+        const avatarConfig = new SpeechSDK.AvatarConfig(
+          this.agent.avatarCharacter,
+          this.agent.avatarStyle,
+          new SpeechSDK.AvatarVideoFormat(),
+        );
+        avatar = new SpeechSDK.AvatarSynthesizer(speechConfig, avatarConfig);
+        this.avatarSynthesizer = avatar;
+      }
       let failMedia!: (error: Error) => void;
-      peer.addTransceiver("video", { direction: "recvonly" });
-      peer.addTransceiver("audio", { direction: "recvonly" });
       peer.ontrack = (event) => {
         if (avatarGeneration !== this.avatarGeneration || !this.conversationActive) {
           event.track.stop();
@@ -282,13 +352,6 @@ export class SpeechController {
         }
       };
 
-      const avatarConfig = new SpeechSDK.AvatarConfig(
-        this.agent.avatarCharacter,
-        this.agent.avatarStyle,
-        new SpeechSDK.AvatarVideoFormat(),
-      );
-      const avatar = new SpeechSDK.AvatarSynthesizer(speechConfig, avatarConfig);
-      this.avatarSynthesizer = avatar;
       const canceled = {
         reason: SpeechSDK.ResultReason.SynthesizingAudioCompleted,
         errorDetails: "",
@@ -299,25 +362,34 @@ export class SpeechController {
       const connectionFailure = new Promise<never>((_resolve, reject) => {
         failMedia = reject;
         peer.onconnectionstatechange = () => {
-          if (peer.connectionState === "failed" || peer.connectionState === "disconnected") {
-            reject(new Error("Avatar media connection was lost."));
+          if (this.peerConnection?.connectionState === "failed" ||
+              this.peerConnection?.connectionState === "disconnected") {
+            const error = new Error("Avatar media connection was lost.");
+            reject(error);
+            void this.closeAvatar().then(() => {
+              this.onAvatarNotice(error.message);
+            }).catch((cleanupError: unknown) => {
+              this.onAvatarNotice(cleanupError instanceof Error ? cleanupError.message : "Avatar cleanup failed.");
+            });
           }
         };
       });
-      const result = await Promise.race([
-        avatar.startAvatarAsync(peer),
-        cancellation,
-        connectionFailure,
-        new Promise<never>((_resolve, reject) => {
-          timeout = setTimeout(() => reject(new Error("Avatar startup timed out.")), 30_000);
-        }),
-      ]);
-      if (timeout) clearTimeout(timeout);
+      if (needsStartup) {
+        const result = await Promise.race([
+          avatar.startAvatarAsync(peer),
+          cancellation,
+          connectionFailure,
+          new Promise<never>((_resolve, reject) => {
+            timeout = setTimeout(() => reject(new Error("Avatar startup timed out.")), 30_000);
+          }),
+        ]);
+        if (timeout !== undefined) clearTimeout(timeout);
+        if (result.reason !== SpeechSDK.ResultReason.SynthesizingAudioCompleted) {
+          throw new Error(result.errorDetails || "The avatar connection failed.");
+        }
+      }
       if (generation !== this.speakingGeneration ||
           avatarGeneration !== this.avatarGeneration || !this.conversationActive) return;
-      if (result.reason !== SpeechSDK.ResultReason.SynthesizingAudioCompleted) {
-        throw new Error(result.errorDetails || "The avatar connection failed.");
-      }
       const spoken = await Promise.race([
         avatar.speakTextAsync(text),
         cancellation,
@@ -329,9 +401,16 @@ export class SpeechController {
       if (spoken.reason !== SpeechSDK.ResultReason.SynthesizingAudioCompleted) {
         throw new Error(spoken.errorDetails || "The avatar could not speak.");
       }
+      succeeded = generation === this.speakingGeneration &&
+        avatarGeneration === this.avatarGeneration && this.conversationActive;
     } finally {
       if (timeout) clearTimeout(timeout);
-      if (avatarGeneration === this.avatarGeneration) await this.closeAvatar();
+      if (avatarGeneration === this.avatarGeneration) {
+        this.avatarBusy = false;
+        this.cancelAvatar = undefined;
+        if (succeeded) this.resetAvatarIdleTimer();
+        else await this.closeAvatar();
+      }
     }
   }
 }

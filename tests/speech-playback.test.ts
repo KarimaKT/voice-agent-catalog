@@ -12,6 +12,7 @@ function speechHarness() {
   const revoked: string[] = [];
   const avatars: Avatar[] = [];
   const peers: Peer[] = [];
+  const notices: string[] = [];
   const timers = new Map<number, { callback: () => void; delay: number }>();
   let nextTimer = 0;
   let delayAvatarStart = false;
@@ -34,16 +35,19 @@ function speechHarness() {
   class Avatar {
     closed = false;
     spoken = 0;
+    starts = 0;
     finish?: () => void;
     start?: () => void;
     constructor() { avatars.push(this); }
     startAvatarAsync() {
+      this.starts++;
       if (avatarFailure) return Promise.reject(new Error("Avatar startup failed"));
       if (delayAvatarStart) return new Promise<{ reason: number }>((resolve) => {
         this.start = () => resolve({ reason: 1 });
       });
       return Promise.resolve({ reason: 1 });
     }
+    async stopSpeakingAsync() {}
     speakTextAsync() {
       this.spoken++;
       return new Promise<{ reason: number }>((resolve) => {
@@ -84,7 +88,7 @@ function speechHarness() {
     Error, Blob, Audio: Player, MediaStream: Stream, RTCPeerConnection: Peer,
     setTimeout: (callback: () => void, delay: number) => {
       const id = ++nextTimer;
-      timers.set(id, { callback, delay });
+      timers.set(id, { callback: () => { timers.delete(id); callback(); }, delay });
       return id;
     },
     clearTimeout: (id: number) => timers.delete(id),
@@ -115,19 +119,26 @@ function speechHarness() {
     setConversationActive(active: boolean): Promise<void>;
     stopAvatar(): Promise<void>;
     close(): Promise<void>;
+    setAvatarIdleTimeout(seconds: number): void;
+    setAgentWorking(working: boolean): void;
+    noteUserActivity(): void;
   };
   return {
-    controller: new Controller({ locale: "en-US", voiceName: "test-voice" }, video, async () => "api-token"),
+    controller: new Controller(
+      { locale: "en-US", voiceName: "test-voice" }, video, async () => "api-token",
+      (message: string) => notices.push(message),
+    ),
     players, synthesizers, config, revoked,
-    avatars, peers, timers, video, Stream,
+    avatars, peers, timers, video, Stream, notices,
     delayAvatar: () => { delayAvatarStart = true; },
     failAvatar: () => { avatarFailure = true; },
     failClose: () => { closeFailure = true; },
-    avatarReady: async () => {
-      for (let index = 0; index < 30 && !avatars[0]?.finish; index++) {
+    avatarReady: async (turn = 1) => {
+      for (let index = 0; index < 30 && (!avatars[0]?.finish || avatars[0].spoken < turn); index++) {
         await new Promise<void>((resolve) => setImmediate(resolve));
       }
       assert.ok(avatars[0]?.finish, "Avatar speech started");
+      assert.equal(avatars[0].spoken, turn);
     },
     failPlayback: () => { playError = new Error("Autoplay denied"); },
     result: { reason: 1, audioData: new ArrayBuffer(16) },
@@ -173,7 +184,7 @@ test("avatar cannot start without an active Copilot Studio session", async () =>
   assert.equal(harness.peers.length, 0);
 });
 
-test("avatar closes and stops its media after every reply, leaving no paid idle session", async () => {
+test("avatar reuses one startup and peer across replies, then closes on idle", async () => {
   const harness = speechHarness();
   await harness.controller.setConversationActive(true);
   const speech = harness.controller.speak("A reply", true);
@@ -182,6 +193,20 @@ test("avatar closes and stops its media after every reply, leaving no paid idle 
   harness.peers[0].ontrack!({ track: { kind: "video", stop() {} }, streams: [stream] });
   harness.avatars[0].finish!();
   await speech;
+  assert.equal(harness.avatars[0].closed, false);
+  assert.equal(harness.peers[0].closed, false);
+  const nextReply = harness.controller.speak("Next reply", true);
+  await harness.avatarReady(2);
+  assert.equal(harness.avatars.length, 1);
+  assert.equal(harness.peers.length, 1);
+  assert.equal(harness.avatars[0].starts, 1);
+  assert.equal([...harness.timers.values()][0].delay, 120_000);
+  harness.avatars[0].finish!();
+  await nextReply;
+  const idleTimer = [...harness.timers.values()][0];
+  assert.equal(idleTimer.delay, 34_000);
+  idleTimer.callback();
+  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(harness.avatars[0].closed, true);
   assert.equal(harness.peers[0].closed, true);
   assert.equal(stream.track.stopped, true);
@@ -274,13 +299,74 @@ test("SDK close errors surface after local peer and track cleanup", async () => 
   const harness = speechHarness();
   await harness.controller.setConversationActive(true);
   const speech = harness.controller.speak("A reply", true);
-  const rejected = assert.rejects(speech, /Avatar close failed/);
   await harness.avatarReady();
-  harness.failClose();
   harness.avatars[0].finish!();
-  await rejected;
+  await speech;
+  harness.failClose();
+  await assert.rejects(harness.controller.stopAvatar(), /Avatar close failed/);
   assert.equal(harness.peers[0].closed, true);
   assert.equal(harness.video.srcObject, null);
+});
+
+test("idle timeout supports exactly 15, 34 and 45 seconds and changing it reschedules", async () => {
+  const harness = speechHarness();
+  await harness.controller.setConversationActive(true);
+  const speech = harness.controller.speak("A reply", true);
+  await harness.avatarReady();
+  harness.avatars[0].finish!();
+  await speech;
+  for (const seconds of [15, 34, 45]) {
+    harness.controller.setAvatarIdleTimeout(seconds);
+    assert.equal(harness.timers.size, 1);
+    assert.equal([...harness.timers.values()][0].delay, seconds * 1000);
+  }
+  assert.throws(() => harness.controller.setAvatarIdleTimeout(30), /15, 34 or 45/);
+  await harness.controller.close();
+});
+
+test("agent work pauses idle cleanup, keeps the connection, and resumes a full interval afterward", async () => {
+  const harness = speechHarness();
+  await harness.controller.setConversationActive(true);
+  const speech = harness.controller.speak("A reply", true);
+  await harness.avatarReady();
+  harness.avatars[0].finish!();
+  await speech;
+  const staleTimer = [...harness.timers.values()][0];
+  harness.controller.setAgentWorking(true);
+  staleTimer.callback();
+  assert.equal(harness.timers.size, 0);
+  assert.equal(harness.avatars[0].closed, false);
+  assert.equal(harness.peers[0].closed, false);
+  harness.controller.setAvatarIdleTimeout(15);
+  harness.controller.noteUserActivity();
+  assert.equal(harness.timers.size, 0);
+  harness.controller.setAgentWorking(false);
+  assert.equal([...harness.timers.values()][0].delay, 15_000);
+  await harness.controller.close();
+});
+
+test("user activity renews idle time and the timeout reconnects only the avatar on a later reply", async () => {
+  const harness = speechHarness();
+  await harness.controller.setConversationActive(true);
+  const speech = harness.controller.speak("A reply", true);
+  await harness.avatarReady();
+  harness.avatars[0].finish!();
+  await speech;
+  const before = [...harness.timers.keys()][0];
+  harness.controller.noteUserActivity();
+  assert.equal(harness.timers.has(before), false);
+  [...harness.timers.values()][0].callback();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.match(harness.notices[0], /34 seconds idle/);
+  const next = harness.controller.speak("Next reply", true);
+  for (let index = 0; index < 30 && !harness.avatars[1]?.finish; index++) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  assert.equal(harness.avatars.length, 2);
+  assert.equal(harness.peers[0].closed, true);
+  harness.avatars[1].finish!();
+  await next;
+  await harness.controller.close();
 });
 
 test("canceled and empty synthesis results surface explicit errors", async () => {

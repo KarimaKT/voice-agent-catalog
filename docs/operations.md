@@ -115,10 +115,17 @@ explicit paid-mode choices; **Start voice conversation** opts into recognition
 and spoken replies. Estimated voice and avatar rates appear before the controls.
 
 Avatar synthesis is permitted only after a successful, non-ended Copilot Studio
-connection. Demo mode does not qualify. Each avatar reply closes its synthesizer,
-WebRTC connection and received tracks when it finishes, so there is no paid
-avatar waiting between turns. Completion first releases the avatar; any final
-spoken confirmation uses audio-only playback.
+connection. Demo mode does not qualify. The avatar's synthesizer and WebRTC
+connection are reused between replies to avoid repeated startup latency.
+**Avatar idle timeout** offers exactly 15, 34 or 45 seconds (default 34).
+Typing and recognized speech renew the idle interval. Agent processing and spoken
+replies suspend the idle timer; a full interval starts when the work finishes.
+Connected silence, including agent processing, remains billable.
+
+Idle expiry releases only avatar resources, not the agent conversation or its
+in-flight business actions. A later reply reconnects video automatically if it
+remains enabled. The UI announces the idle disconnect. Completion first releases
+the avatar; any final spoken confirmation uses audio-only playback.
 
 Stop, avatar-off, agent changes, errors, page exit and hidden tabs release
 resources. Late credentials, startup results and media tracks cannot revive a
@@ -129,7 +136,8 @@ There is no central browser-session enumeration or server-side orphan sweeper.
 
 The rule uses the client's confirmed conversation and observed completion/errors;
 the SDK does not provide a continuous server-session liveness heartbeat. Remote
-expiry is detected on the next request; no avatar stays connected between requests.
+expiry is detected on the next request; explicit cleanup and the selected idle
+timeout limit disconnected-client cost exposure.
 
 ### Change cost wording without redeploying Teams
 

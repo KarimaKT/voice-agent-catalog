@@ -66,6 +66,18 @@ test("completion, Stop, errors, avatar off and page exit release speech resource
   assert.match(functionBody("speakMessages"), /avatarEnabled && !preserveCompletion && !configRef\.current\?\.demoMode/);
 });
 
+test("idle choices are exact and waiting for the agent suspends cleanup until the turn finishes", () => {
+  assert.match(source, /React\.useState<AvatarIdleTimeoutSeconds>\(34\)/);
+  for (const seconds of [15, 34, 45]) {
+    assert.match(source, new RegExp(`<option value=\\{${seconds}\\}>${seconds} seconds<\\/option>`));
+  }
+  const send = functionBody("sendMessage");
+  assert.ok(send.indexOf("setAgentWorking(true)") < send.indexOf("await client.send"));
+  assert.match(send, /finally \{\s*turnInFlightRef\.current = false;\s*speechRef\.current\?\.setAgentWorking\(false\)/);
+  assert.match(source, /noteUserActivity\(\)/);
+  assert.match(source, /connected waiting time remains billable/);
+});
+
 test("Connect preserves explicitly selected input language while deliberate agent changes default to output Locale", () => {
   const connect = functionBody("connect");
   assert.doesNotMatch(connect, /setInputLanguage\(selected\.locale\)/);
