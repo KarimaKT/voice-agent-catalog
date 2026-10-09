@@ -32,6 +32,8 @@ function createSpeechConfig(
 export class SpeechController {
   private recognizer?: SpeechSDK.SpeechRecognizer;
   private synthesizer?: SpeechSDK.SpeechSynthesizer;
+  private speaker?: SpeechSDK.SpeakerAudioDestination;
+  private finishPlayback?: () => void;
   private avatarSynthesizer?: SpeechSDK.AvatarSynthesizer;
   private peerConnection?: RTCPeerConnection;
   private finalSegments: string[] = [];
@@ -131,13 +133,44 @@ export class SpeechController {
       return;
     }
 
-    const audioConfig = SpeechSDK.AudioConfig.fromDefaultSpeakerOutput();
+    speechConfig.speechSynthesisOutputFormat =
+      SpeechSDK.SpeechSynthesisOutputFormat.Audio24Khz48KBitRateMonoMp3;
+    const speaker = new SpeechSDK.SpeakerAudioDestination();
+    this.speaker = speaker;
+    const audioConfig = SpeechSDK.AudioConfig.fromSpeakerOutput(speaker);
     this.synthesizer = new SpeechSDK.SpeechSynthesizer(speechConfig, audioConfig);
     await new Promise<void>((resolve, reject) => {
+      let synthesized = false;
+      let playbackEnded = false;
+      const finish = () => {
+        if (this.finishPlayback === finish) this.finishPlayback = undefined;
+        resolve();
+      };
+      const fail = (error: Error) => {
+        if (this.finishPlayback === finish) this.finishPlayback = undefined;
+        reject(error);
+      };
+      this.finishPlayback = finish;
+      speaker.onAudioEnd = () => {
+        playbackEnded = true;
+        if (synthesized) finish();
+      };
+      speaker.onAudioStart = () => {
+        speaker.internalAudio.addEventListener("error", () => {
+          fail(new Error("The browser could not play speech audio."));
+        }, { once: true });
+      };
       this.synthesizer?.speakTextAsync(
         text,
-        () => resolve(),
-        (error) => reject(new Error(error)),
+        (result) => {
+          if (result.reason !== SpeechSDK.ResultReason.SynthesizingAudioCompleted) {
+            fail(new Error(result.errorDetails || "Speech synthesis failed."));
+            return;
+          }
+          synthesized = true;
+          if (playbackEnded) finish();
+        },
+        (error) => fail(new Error(error)),
       );
     });
   }
@@ -146,6 +179,10 @@ export class SpeechController {
     if (this.avatarSynthesizer) {
       await this.avatarSynthesizer.stopSpeakingAsync().catch(() => undefined);
     }
+    this.speaker?.pause();
+    this.speaker = undefined;
+    this.finishPlayback?.();
+    this.finishPlayback = undefined;
     this.synthesizer?.close();
     this.synthesizer = undefined;
   }

@@ -48,5 +48,6 @@ test("MSAL v5 callback uses a dedicated redirect bridge instead of a placeholder
   assert.match(page, /auth-callback\.ts/);
   assert.match(host, /sendFile\(path\.join\(__dirname, "client", "auth-callback.html"\)\)/);
   assert.match(host, /frame-src 'self' https:\/\/login\.microsoftonline\.com/);
+  assert.match(host, /script-src 'self'; worker-src 'self' blob: data:/);
   assert.doesNotMatch(host, /setHeader\("Cross-Origin-Opener-Policy"/);
 });

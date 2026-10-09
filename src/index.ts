@@ -94,7 +94,7 @@ const adapter = secureServer
   : new ExpressAdapter();
 adapter.use((_request: Request, response: Response, next: NextFunction) => {
   response.removeHeader("X-Powered-By");
-  response.setHeader("Content-Security-Policy", "default-src 'self'; connect-src 'self' https://login.microsoftonline.com https://res.cdn.office.net https://api.powerplatform.com https://*.api.powerplatform.com https://*.environment.api.powerplatform.com https://*.cognitiveservices.azure.com https://*.speech.microsoft.com wss://*.speech.microsoft.com; frame-src 'self' https://login.microsoftonline.com; frame-ancestors 'self' https://teams.microsoft.com https://*.teams.microsoft.com https://*.cloud.microsoft; img-src 'self' https: data: blob:; media-src 'self' blob:; script-src 'self'; style-src 'self' 'unsafe-inline'");
+  response.setHeader("Content-Security-Policy", "default-src 'self'; connect-src 'self' https://login.microsoftonline.com https://res.cdn.office.net https://api.powerplatform.com https://*.api.powerplatform.com https://*.environment.api.powerplatform.com https://*.cognitiveservices.azure.com https://*.speech.microsoft.com wss://*.speech.microsoft.com; frame-src 'self' https://login.microsoftonline.com; frame-ancestors 'self' https://teams.microsoft.com https://*.teams.microsoft.com https://*.cloud.microsoft; img-src 'self' https: data: blob:; media-src 'self' blob:; script-src 'self'; worker-src 'self' blob: data:; style-src 'self' 'unsafe-inline'");
   response.setHeader("Referrer-Policy", "no-referrer");
   response.setHeader("X-Content-Type-Options", "nosniff");
   next();

@@ -108,6 +108,11 @@ If `/api/speech/token` returns 502:
 Avatar relay failure falls back to audio-only TTS. Basic TTS/STT can still work
 when real-time avatar relay is unavailable.
 
+Audio-only mode waits for the SDK speaker's playback-end event before reopening
+recognition, not merely the service's synthesis-completed callback. Stop pauses
+the speaker and releases that wait. CSP permits the Speech SDK's data/blob
+workers separately; page scripts remain restricted to the same origin.
+
 ## Deployment troubleshooting
 
 - Zero App Service quota: choose another avatar-supported region and revalidate.
