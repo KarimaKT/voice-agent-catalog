@@ -50,7 +50,7 @@ test("paid modes are opt-in and the cost notices precede conversation controls",
   assert.match(source, /\[readRepliesAloud, setReadRepliesAloud\] = React\.useState\(false\)/);
   assert.ok(source.indexOf('aria-label="Voice and avatar costs"') < source.indexOf('className="composer-actions"'));
   assert.match(source, /setCostNotices\(config\.costNotices\)/);
-  assert.match(source, /narrate = readRepliesAloud \|\| avatarEnabled \|\| voiceConversationActiveRef\.current/);
+  assert.match(source, /narrate = readRepliesAloudRef\.current \|\| avatarEnabledRef\.current \|\| voiceConversationActiveRef\.current/);
   assert.match(source, /if \(!narrate\) return/);
 });
 
@@ -63,7 +63,9 @@ test("completion, Stop, errors, avatar off and page exit release speech resource
   assert.match(source, /window\.addEventListener\("pagehide", releaseOnExit\)/);
   assert.match(source, /document\.addEventListener\("visibilitychange", releaseWhenHidden\)/);
   assert.match(source, /current === "complete" \|\| current === "error" \|\| current === "thinking" \? current : "ready"/);
-  assert.match(functionBody("speakMessages"), /avatarEnabled && !preserveCompletion && !configRef\.current\?\.demoMode/);
+  assert.match(functionBody("speakMessages"), /avatarEnabledRef\.current && !preserveCompletion && !configRef\.current\?\.demoMode/);
+  assert.match(functionBody("speakMessages"), /speak\(text, useAvatar && avatarEnabledRef\.current\)/);
+  assert.match(source, /avatarEnabledRef\.current = event\.target\.checked;\s*setAvatarEnabled/);
 });
 
 test("idle choices are exact and waiting for the agent suspends cleanup until the turn finishes", () => {

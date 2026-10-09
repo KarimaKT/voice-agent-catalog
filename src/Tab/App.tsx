@@ -190,6 +190,8 @@ export default function App() {
   const speechRef = React.useRef<SpeechController | undefined>(undefined);
   const transcriptRef = React.useRef<HTMLDivElement>(null);
   const voiceConversationActiveRef = React.useRef(false);
+  const avatarEnabledRef = React.useRef(false);
+  const readRepliesAloudRef = React.useRef(false);
   const autoSubmitTimerRef = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const turnInFlightRef = React.useRef(false);
   const catalogLoadInFlightRef = React.useRef(false);
@@ -373,7 +375,7 @@ export default function App() {
         turn.messages.length > 0
           ? turn.messages
           : [{ text: completed ? "Conversation complete." : selected.welcomeMessage }];
-      const narrate = readRepliesAloud || avatarEnabled || voiceConversationActiveRef.current;
+      const narrate = readRepliesAloudRef.current || avatarEnabledRef.current || voiceConversationActiveRef.current;
       setMessages(welcome.map((message) => createMessage("agent", message)));
       if (completed) setVoiceConversation(false);
       await speechRef.current?.setConversationActive(!completed && !config.demoMode);
@@ -449,7 +451,7 @@ export default function App() {
           ? `https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(turn.emailDraft.to)}&subject=${encodeURIComponent(turn.emailDraft.subject)}&body=${encodeURIComponent(turn.emailDraft.body)}`
           : "",
       );
-      const narrate = readRepliesAloud || avatarEnabled || voiceConversationActiveRef.current;
+      const narrate = readRepliesAloudRef.current || avatarEnabledRef.current || voiceConversationActiveRef.current;
       if (completed) {
         setVoiceConversation(false);
         await speechRef.current?.setConversationActive(false);
@@ -571,12 +573,12 @@ export default function App() {
     texts: string[],
     preserveCompletion = false,
     epoch = sessionEpochRef.current,
-    narrate = readRepliesAloud || avatarEnabled || voiceConversationActiveRef.current,
+    narrate = readRepliesAloudRef.current || avatarEnabledRef.current || voiceConversationActiveRef.current,
   ): Promise<void> {
     if (!speechRef.current || epoch !== sessionEpochRef.current || document.hidden) {
       return;
     }
-    const useAvatar = avatarEnabled && !preserveCompletion && !configRef.current?.demoMode;
+    const useAvatar = avatarEnabledRef.current && !preserveCompletion && !configRef.current?.demoMode;
     if (!narrate) return;
     if (texts.length === 0) {
       if (voiceConversationActiveRef.current && !preserveCompletion) {
@@ -589,11 +591,12 @@ export default function App() {
     try {
       for (const text of texts) {
         if (epoch !== sessionEpochRef.current || document.hidden) return;
-        await speechRef.current.speak(text, useAvatar);
+        await speechRef.current.speak(text, useAvatar && avatarEnabledRef.current);
       }
     } catch (error) {
       if (epoch !== sessionEpochRef.current || document.hidden) return;
       if (useAvatar) {
+        avatarEnabledRef.current = false;
         setAvatarEnabled(false);
         setMessages((current) => [
           ...current,
@@ -907,7 +910,10 @@ export default function App() {
                 type="checkbox"
                 checked={readRepliesAloud}
                 disabled={!costNotices}
-                onChange={(event) => setReadRepliesAloud(event.target.checked)}
+                onChange={(event) => {
+                  readRepliesAloudRef.current = event.target.checked;
+                  setReadRepliesAloud(event.target.checked);
+                }}
               />
               <span>Read typed replies aloud (paid voice)</span>
             </label>
@@ -917,6 +923,7 @@ export default function App() {
                 checked={avatarEnabled}
                 disabled={!costNotices || configRef.current?.demoMode}
                 onChange={(event) => {
+                  avatarEnabledRef.current = event.target.checked;
                   setAvatarEnabled(event.target.checked);
                   if (!event.target.checked) {
                     setAvatarVisible(false);
