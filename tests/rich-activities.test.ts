@@ -128,6 +128,14 @@ test("streams accept attachment-only and speak-only turns and honor EndOfConvers
   assert.equal(ended.conversationId, "continuous-1");
 });
 
+test("silent startup preserves the SDK's conversation metadata even with no activities", async () => {
+  const response = { activities: [], conversationId: "header-conversation" };
+  const turn = await collectAgentTurn(response.activities, response.conversationId);
+  assert.equal(turn.conversationId, "header-conversation");
+  assert.equal(turn.messages.length, 0);
+  assert.equal(turn.completed, false);
+});
+
 test("Copilot transport sends card submissions through existing streaming conversation", async () => {
   const definition = {
     displayName: "Agent", environmentId: "environment-1", schemaName: "agent",

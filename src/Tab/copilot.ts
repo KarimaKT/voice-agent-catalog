@@ -75,7 +75,7 @@ export function createMessageActivity(
 }
 
 export async function collectAgentTurn(
-  activities: AsyncIterable<Activity>,
+  activities: AsyncIterable<Activity> | Iterable<Activity>,
   conversationId = "",
 ): Promise<AgentTurn> {
   const turn: AgentTurn = { messages: [], conversationId, completed: false };
@@ -105,6 +105,7 @@ export class MicrosoftIdentity {
   private readonly msalPromise: Promise<IPublicClientApplication>;
   private readonly tokenRequests = new Map<string, Promise<string>>();
   private account?: AccountInfo;
+  private redirected = false;
 
   constructor(
     private readonly config: AppConfig,
@@ -126,9 +127,23 @@ export class MicrosoftIdentity {
       },
     } as const;
 
-    this.msalPromise = teamsContext.supportsNestedAuth
+    this.msalPromise = (teamsContext.supportsNestedAuth
       ? createNestablePublicClientApplication(msalConfig)
-      : createStandardPublicClientApplication(msalConfig);
+      : createStandardPublicClientApplication(msalConfig)).then(async (msal) => {
+        if (!teamsContext.isTeamsHosted) {
+          const result = await msal.handleRedirectPromise();
+          if (result) {
+            this.activateAccount(msal, result.account);
+            this.redirected = true;
+          }
+        }
+        return msal;
+      });
+  }
+
+  async completeRedirect(): Promise<boolean> {
+    await this.msalPromise;
+    return this.redirected;
   }
 
   async acquireToken(scopes: string[], interactive = true): Promise<string> {
@@ -191,6 +206,14 @@ export class MicrosoftIdentity {
         throw error;
       }
       try {
+        if (!this.teamsContext.isTeamsHosted) {
+          await msal.acquireTokenRedirect({
+            scopes,
+            account: this.account,
+            loginHint: this.account?.username,
+          });
+          throw new Error("Microsoft sign-in requires navigation. Complete sign-in, then return to the application.");
+        }
         const result = await msal.acquireTokenPopup({
           scopes,
           loginHint: this.teamsContext.loginHint,
@@ -245,7 +268,8 @@ export class CopilotAgentClient {
       emitStartConversationEvent: false,
       locale: this.agent.locale,
     };
-    const start = await collectAgentTurn(this.client.startConversationStreaming(startRequest));
+    const response = await this.client.startConversationWithResponse(startRequest);
+    const start = await collectAgentTurn(response.activities, response.conversationId);
     this.conversationId = start.conversationId;
 
     if (!this.conversationId) {

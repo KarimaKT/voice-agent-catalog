@@ -245,6 +245,9 @@ export default function App() {
         );
         setState("ready");
         setStatus(initialAgents.length ? "Choose an agent to connect" : "Sign in to load your authorized catalog");
+        if (await identity.completeRedirect() && !disposed) {
+          void loadCatalog();
+        }
       } catch (error) {
         setState("error");
         setStatus(error instanceof Error ? error.message : "Initialization failed.");
@@ -756,7 +759,7 @@ export default function App() {
                 <button
                   className="secondary-button"
                   onClick={() => void startVoiceConversation()}
-                  disabled={!connected || busy || state === "complete"}
+                  disabled={!catalogLoaded || !selectedHarness.supported || busy || state === "complete"}
                 >
                   Start voice conversation
                 </button>

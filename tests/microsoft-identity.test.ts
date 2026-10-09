@@ -21,6 +21,7 @@ async function identityHarness(teams = true) {
   let silentCalls = 0;
   let nestedFactories = 0;
   let standardFactories = 0;
+  let redirects = 0;
   const msal = {
     getActiveAccount: () => guest,
     getAccount: (filter: unknown) => { filters.push(filter); return guest; },
@@ -32,6 +33,11 @@ async function identityHarness(teams = true) {
     acquireTokenPopup: async () => {
       popups++;
       return { accessToken: "popup-token", account: guest };
+    },
+    handleRedirectPromise: async () => null as null | { accessToken: string; account: typeof guest },
+    acquireTokenRedirect: async () => {
+      redirects++;
+      throw new Error("test navigation");
     },
   };
   const exportsByModule: Record<string, Record<string, unknown>> = {
@@ -56,7 +62,7 @@ async function identityHarness(teams = true) {
     ...Object.assign({}, ...Object.values(exportsByModule)),
   }) as new (
     config: Record<string, unknown>, context: Record<string, unknown>,
-  ) => { acquireApiToken(): Promise<string> };
+  ) => { acquireApiToken(): Promise<string>; completeRedirect(): Promise<boolean> };
   const teamsContext = {
     isTeamsHosted: teams, supportsNestedAuth: teams,
     loginHint: "guest@example.com", tenantId,
@@ -66,7 +72,7 @@ async function identityHarness(teams = true) {
     identity: new Identity(config, teamsContext),
     createIdentity: (overrides: Record<string, unknown>) => new Identity(config, { ...teamsContext, ...overrides }),
     msal, filters, activated,
-    counts: () => ({ popups, silentCalls, nestedFactories, standardFactories }),
+    counts: () => ({ popups, silentCalls, nestedFactories, standardFactories, redirects }),
   };
 }
 
@@ -120,4 +126,26 @@ test("browser identity retains standard MSAL factory instead of the Teams broker
   await harness.identity.acquireApiToken();
   assert.equal(harness.counts().standardFactories, 1);
   assert.equal(harness.counts().nestedFactories, 0);
+});
+
+test("standalone interaction uses same-window redirect without an embedded popup", async () => {
+  const harness = await identityHarness(false);
+  harness.msal.acquireTokenSilent = async () => {
+    throw new InteractionRequiredAuthError("Consent required");
+  };
+  await assert.rejects(harness.identity.acquireApiToken(), /test navigation/);
+  assert.equal(harness.counts().redirects, 1);
+  assert.equal(harness.counts().popups, 0);
+});
+
+test("redirect completion activates the verified account for resumed catalog discovery", async () => {
+  const harness = await identityHarness(false);
+  harness.msal.handleRedirectPromise = async () => ({
+    accessToken: "redirect-token",
+    account: guest,
+  });
+  const resumed = harness.createIdentity({});
+  assert.equal(await resumed.completeRedirect(), true);
+  assert.equal(harness.activated.at(-1), guest);
+  assert.equal(await resumed.acquireApiToken(), "silent-token");
 });

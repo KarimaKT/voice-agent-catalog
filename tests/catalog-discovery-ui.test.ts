@@ -40,7 +40,7 @@ test("one-action voice start connects only after discovery and resumes existing 
   const body = functionBody("startVoiceConversation");
   assert.match(body, /if \(!catalogLoaded\) \{\s*await loadCatalog\(\);\s*return;\s*\}/);
   assert.match(body, /setVoiceConversation\(true\);\s*if \(!agentClientRef\.current\) \{\s*await connect\(\);\s*return;\s*\}\s*await startListening\(true\)/);
-  assert.match(source, /disabled=\{!catalogLoaded \|\| !selectedHarness\.supported \|\| busy \|\| state === "complete"\}/);
+  assert.match(source, /onClick=\{\(\) => void startVoiceConversation\(\)\}\s*disabled=\{!catalogLoaded \|\| !selectedHarness\.supported \|\| busy \|\| state === "complete"\}/);
   assert.match(source, /const connected = Boolean\(agentClientRef\.current\)/);
 });
 

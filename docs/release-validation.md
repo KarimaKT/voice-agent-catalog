@@ -36,6 +36,20 @@ GitHub Actions and the deployment lifecycle run tests/typecheck/build.
 Cloud what-if, consent, published-agent access, microphone/Teams behavior and
 email delivery remain environment-specific acceptance checks, not unit tests.
 
+## Voice acceptance evidence
+
+After loading the catalog, **Start voice conversation** connects the selected
+agent and starts the managed voice loop without a separate Connect action.
+Verify a recognized answer is submitted after silence, recognition pauses for
+the agent reply, listening resumes, and **Stop conversation** closes the audio
+input. Repeat after restarting voice without reconnecting the agent.
+
+Automation may inject nonsensitive synthetic audio instead of opening a
+physical microphone. Record that distinction explicitly: synthetic tests prove
+the recognition and turn-management path, not a user's headset, device
+permissions, acoustic conditions or Teams desktop microphone behavior. Pilot
+users must check those on their actual devices before relying on voice.
+
 ## Privacy defaults
 
 Azure Monitor automatic HTTP/dependency, console and browser tracing is

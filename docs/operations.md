@@ -49,6 +49,11 @@ https://<app>.azurewebsites.net/auth/callback
 
 Re-run provisioning after updating `aad.manifest.json`.
 
+Standalone consent now uses same-window redirect. The callback bridge returns
+to the app, processes the result and reloads the authorized catalog. A redirect
+does not start an agent or repeat a business action. Teams uses its nested broker
+instead of redirecting its tab.
+
 ### Need admin approval
 
 The generic app requests its own `access_as_user` scope and

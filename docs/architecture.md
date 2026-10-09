@@ -52,6 +52,10 @@ Teams NAA uses the identity already active in Teams, avoiding a separate account
 login. Tenant admin consent can cover `access_as_user` and the separate Copilot
 Studio permission. Later token acquisition is silent. The
 browser-only callback page does not render React or an agent.
+Standalone interaction uses same-window MSAL redirect rather than relying on
+browser popup windows. The main application processes the redirect result and
+reloads the authenticated catalog without starting a conversation. Teams keeps
+the nested broker path; no browser redirect is started inside Teams.
 
 MSAL Browser v5 requires the dedicated `/auth/callback` page to load
 `@azure/msal-browser/redirect-bridge` and broadcast the authorization response.
@@ -99,6 +103,9 @@ row validation/visibility, and the React client consumes only sanitized rows.
 The flow is a connector boundary, not an alternative source of caller identity.
 The UI sends voice-interface context at the start of every real conversation;
 this requests output-language/style adaptation but cannot override agent rules.
+Silent startup uses the SDK's typed start response: its conversation ID may be
+returned in response metadata even when no start activities are emitted. The
+subsequent interface message and user turns use that ID and remain streamed.
 
 See [release gates and privacy defaults](release-validation.md).
 
