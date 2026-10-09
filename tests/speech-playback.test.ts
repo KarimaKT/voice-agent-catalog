@@ -11,6 +11,8 @@ function speechHarness() {
   const config: Record<string, unknown> = {};
   const revoked: string[] = [];
   let playError: Error | undefined;
+  let credentialsGate: Promise<void> | undefined;
+  let credentialRequests = 0;
   class Player {
     paused = false;
     onended?: () => void;
@@ -36,7 +38,11 @@ function speechHarness() {
   const Controller = runInNewContext(`${script}\nSpeechController;`, {
     Error, Blob, Audio: Player,
     URL: { createObjectURL: () => "blob:test-audio", revokeObjectURL: (url: string) => revoked.push(url) },
-    fetch: async () => ({ ok: true, json: async () => ({ token: "test-token", region: "test-region" }) }),
+    fetch: async () => {
+      credentialRequests++;
+      if (credentialsGate) await credentialsGate;
+      return { ok: true, json: async () => ({ token: "test-token", region: "test-region" }) };
+    },
     SpeechSDK: {
       SpeechConfig: { fromAuthorizationToken: () => config },
       SpeechSynthesisOutputFormat: { Riff16Khz16BitMonoPcm: 1 },
@@ -47,12 +53,25 @@ function speechHarness() {
     speak(text: string, avatar: boolean): Promise<void>;
     stopSpeaking(): Promise<void>;
     setInputLanguage(locale: string): void;
+    startListening(...callbacks: unknown[]): Promise<void>;
+    stopListening(): Promise<void>;
   };
   return {
     controller: new Controller({ locale: "en-US", voiceName: "test-voice" }, {}, async () => "api-token"),
     players, synthesizers, config, revoked,
     failPlayback: () => { playError = new Error("Autoplay denied"); },
     result: { reason: 1, audioData: new ArrayBuffer(16) },
+    delayCredentials: () => {
+      let release!: () => void;
+      credentialsGate = new Promise<void>((resolve) => { release = resolve; });
+      return release;
+    },
+    credentialsRequested: async () => {
+      for (let index = 0; index < 20 && !credentialRequests; index++) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      assert.equal(credentialRequests, 1);
+    },
     ready: async () => {
       for (let index = 0; index < 20 && !synthesizers[0]?.complete; index++) {
         await new Promise<void>((resolve) => setImmediate(resolve));
@@ -137,4 +156,26 @@ test("recognition language stays independent of catalog synthesis language and v
   harness.synthesizers[0].complete!(harness.result);
   harness.players[0].onended!();
   await speech;
+});
+
+test("Stop during credential acquisition prevents late synthesis from starting", async () => {
+  const harness = speechHarness();
+  const release = harness.delayCredentials();
+  const speech = harness.controller.speak("A reply", false);
+  await harness.credentialsRequested();
+  await harness.controller.stopSpeaking();
+  release();
+  await speech;
+  assert.equal(harness.synthesizers.length, 0);
+  assert.equal(harness.players.length, 0);
+});
+
+test("Stop during credential acquisition prevents late microphone acquisition", async () => {
+  const harness = speechHarness();
+  const release = harness.delayCredentials();
+  const listening = harness.controller.startListening(() => {}, () => {}, () => {});
+  await harness.credentialsRequested();
+  await harness.controller.stopListening();
+  release();
+  await listening;
 });

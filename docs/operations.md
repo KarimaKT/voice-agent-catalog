@@ -113,6 +113,8 @@ recognition, not merely the service's synthesis-completed callback. Stop pauses
 the speaker and releases that wait. Audio-only output explicitly uses RIFF WAV
 with native browser playback; the SDK's streaming player can stall without
 delivering playback-end. Temporary audio URLs are revoked on completion or Stop.
+Stop also invalidates pending Speech credential requests so late responses cannot
+reopen the microphone or start playback.
 CSP permits the Speech SDK's data/blob
 workers separately; page scripts remain restricted to the same origin.
 

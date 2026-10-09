@@ -37,6 +37,8 @@ export class SpeechController {
   private peerConnection?: RTCPeerConnection;
   private finalSegments: string[] = [];
   private recognitionLanguage: string;
+  private listeningGeneration = 0;
+  private speakingGeneration = 0;
 
   constructor(
     private agent: AgentDefinition,
@@ -67,9 +69,12 @@ export class SpeechController {
     onFinal: (text: string) => void,
     onError: (message: string) => void,
   ): Promise<void> {
+    const generation = ++this.listeningGeneration;
     await this.stopSpeaking();
-    await this.stopListening();
+    if (generation !== this.listeningGeneration) return;
+    await this.closeRecognizer();
     const credentials = await getCredentials(await this.getApiAccessToken());
+    if (generation !== this.listeningGeneration) return;
     const speechConfig = createSpeechConfig(
       credentials,
       this.agent,
@@ -80,9 +85,11 @@ export class SpeechController {
     this.recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
 
     this.recognizer.recognizing = (_sender, event) => {
+      if (generation !== this.listeningGeneration) return;
       onInterim([...this.finalSegments, event.result.text].filter(Boolean).join(" "));
     };
     this.recognizer.recognized = (_sender, event) => {
+      if (generation !== this.listeningGeneration) return;
       const text = event.result.text.trim();
       if (text) {
         this.finalSegments.push(text);
@@ -90,6 +97,7 @@ export class SpeechController {
       }
     };
     this.recognizer.canceled = (_sender, event) => {
+      if (generation !== this.listeningGeneration) return;
       onError(event.errorDetails || "Speech recognition was canceled.");
     };
 
@@ -99,6 +107,11 @@ export class SpeechController {
   }
 
   async stopListening(): Promise<void> {
+    this.listeningGeneration++;
+    await this.closeRecognizer();
+  }
+
+  private async closeRecognizer(): Promise<void> {
     if (!this.recognizer) {
       return;
     }
@@ -119,8 +132,11 @@ export class SpeechController {
     if (!text) {
       return;
     }
-    await this.stopSpeaking();
+    const stopping = this.stopSpeaking();
+    const generation = this.speakingGeneration;
+    await stopping;
     const credentials = await getCredentials(await this.getApiAccessToken());
+    if (generation !== this.speakingGeneration) return;
     const speechConfig = createSpeechConfig(
       credentials,
       this.agent,
@@ -128,7 +144,7 @@ export class SpeechController {
     );
 
     if (avatarEnabled) {
-      await this.speakWithAvatar(text, credentials, speechConfig);
+      await this.speakWithAvatar(text, credentials, speechConfig, generation);
       return;
     }
 
@@ -176,6 +192,7 @@ export class SpeechController {
   }
 
   async stopSpeaking(): Promise<void> {
+    this.speakingGeneration++;
     if (this.avatarSynthesizer) {
       await this.avatarSynthesizer.stopSpeakingAsync().catch(() => undefined);
     }
@@ -205,6 +222,7 @@ export class SpeechController {
     text: string,
     credentials: SpeechCredentials,
     speechConfig: SpeechSDK.SpeechConfig,
+    generation: number,
   ): Promise<void> {
     if (!credentials.relay) {
       throw new Error("Avatar relay credentials are unavailable.");
@@ -236,6 +254,7 @@ export class SpeechController {
       );
       this.avatarSynthesizer = new SpeechSDK.AvatarSynthesizer(speechConfig, avatarConfig);
       const result = await this.avatarSynthesizer.startAvatarAsync(this.peerConnection);
+      if (generation !== this.speakingGeneration) return;
       if (result.reason !== SpeechSDK.ResultReason.SynthesizingAudioCompleted) {
         throw new Error(result.errorDetails || "The avatar connection failed.");
       }
