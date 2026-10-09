@@ -50,6 +50,13 @@ the recognition and turn-management path, not a user's headset, device
 permissions, acoustic conditions or Teams desktop microphone behavior. Pilot
 users must check those on their actual devices before relying on voice.
 
+For avatar lifecycle changes, use local SDK doubles to assert that no avatar
+starts before a successful session, and Stop/end/off/failure release the SDK,
+peer connection, received tracks and timers. Exercise late startup, media failure
+and the exact 30-second startup/120-second speech watchdog thresholds without
+making billable Speech or Copilot requests. Verify text-only defaults, upfront
+cost notices, and audio-only narration of terminal messages.
+
 ## Privacy defaults
 
 Azure Monitor automatic HTTP/dependency, console and browser tracing is

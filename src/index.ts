@@ -192,6 +192,12 @@ adapter.get("/api/config", (_request: Request, response: Response) => {
       defaultAgent,
       catalogEnabled,
       demoMode,
+      costNotices: {
+        voice: process.env.VOICE_COST_NOTICE?.trim() ||
+          "Voice estimate (USD): input $1/hour of audio sent (~$0.0167/min); output $15/million characters ($0.015/1,000 characters).",
+        avatar: process.env.AVATAR_COST_NOTICE?.trim() ||
+          "Avatar estimate (USD): $0.50/min while connected, including silence, plus voice synthesis. Three connected minutes cost $1.50 for video.",
+      },
       demoAgents: demoMode
         ? [
             defaultAgent,

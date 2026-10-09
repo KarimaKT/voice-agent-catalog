@@ -51,3 +51,11 @@ test("MSAL v5 callback uses a dedicated redirect bridge instead of a placeholder
   assert.match(host, /script-src 'self'; worker-src 'self' blob: data:/);
   assert.doesNotMatch(host, /setHeader\("Cross-Origin-Opener-Policy"/);
 });
+
+test("public config exposes operator-editable cost notices with explicit default rates", () => {
+  const host = fs.readFileSync("src/index.ts", "utf8");
+  assert.match(host, /VOICE_COST_NOTICE\?\.trim\(\)/);
+  assert.match(host, /AVATAR_COST_NOTICE\?\.trim\(\)/);
+  assert.match(host, /\$1\/hour[\s\S]*?\$15\/million characters/);
+  assert.match(host, /\$0\.50\/min while connected, including silence/);
+});

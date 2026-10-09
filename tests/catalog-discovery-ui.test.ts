@@ -33,15 +33,37 @@ test("connecting before discovery only loads the catalog; after discovery it use
   assert.match(body, /const selected = agents\.find\(\(agent\) => agent\.id === selectedAgentId\)/);
   assert.doesNotMatch(body, /config\.defaultAgent|new MicrosoftIdentity|loadAgentCatalog\(/);
   assert.match(body, /new CopilotAgentClient\(identity, selected\)/);
-  assert.match(body, /await agentClientRef\.current\.connect\(\)/);
+  assert.match(body, /const turn = await client\.connect\(\)/);
+  assert.match(body, /if \(epoch !== sessionEpochRef\.current\) return;\s*agentClientRef\.current = client/);
 });
 
 test("one-action voice start connects only after discovery and resumes existing conversations without reconnecting", () => {
   const body = functionBody("startVoiceConversation");
   assert.match(body, /if \(!catalogLoaded\) \{\s*await loadCatalog\(\);\s*return;\s*\}/);
-  assert.match(body, /setVoiceConversation\(true\);\s*if \(!agentClientRef\.current\) \{\s*await connect\(\);\s*return;\s*\}\s*await startListening\(true\)/);
+  assert.match(body, /setVoiceConversation\(true\);\s*if \(!agentClientRef\.current\) \{\s*await connect\(\);\s*return;\s*\}\s*await speechRef\.current\?\.setConversationActive\(!configRef\.current\?\.demoMode\);\s*await startListening\(true\)/);
   assert.match(source, /onClick=\{\(\) => void startVoiceConversation\(\)\}\s*disabled=\{!catalogLoaded \|\| !selectedHarness\.supported \|\| busy \|\| state === "complete"\}/);
   assert.match(source, /const connected = Boolean\(agentClientRef\.current\)/);
+});
+
+test("paid modes are opt-in and the cost notices precede conversation controls", () => {
+  assert.match(source, /\[avatarEnabled, setAvatarEnabled\] = React\.useState\(false\)/);
+  assert.match(source, /\[readRepliesAloud, setReadRepliesAloud\] = React\.useState\(false\)/);
+  assert.ok(source.indexOf('aria-label="Voice and avatar costs"') < source.indexOf('className="composer-actions"'));
+  assert.match(source, /setCostNotices\(config\.costNotices\)/);
+  assert.match(source, /narrate = readRepliesAloud \|\| avatarEnabled \|\| voiceConversationActiveRef\.current/);
+  assert.match(source, /if \(!narrate\) return/);
+});
+
+test("completion, Stop, errors, avatar off and page exit release speech resources", () => {
+  assert.match(functionBody("sendMessage"), /if \(completed\) \{\s*setVoiceConversation\(false\);\s*await speechRef\.current\?\.setConversationActive\(false\)/);
+  assert.match(functionBody("stopVoiceConversation"), /sessionEpochRef\.current\+\+/);
+  assert.match(functionBody("stopVoiceConversation"), /setConversationActive\(false\)/);
+  assert.match(source, /function handleError[\s\S]*?setConversationActive\(false\)\.catch\(reportCleanupError\)/);
+  assert.match(source, /stopAvatar\(\)\.catch\(reportCleanupError\)/);
+  assert.match(source, /window\.addEventListener\("pagehide", releaseOnExit\)/);
+  assert.match(source, /document\.addEventListener\("visibilitychange", releaseWhenHidden\)/);
+  assert.match(source, /current === "complete" \|\| current === "error" \|\| current === "thinking" \? current : "ready"/);
+  assert.match(functionBody("speakMessages"), /avatarEnabled && !preserveCompletion && !configRef\.current\?\.demoMode/);
 });
 
 test("Connect preserves explicitly selected input language while deliberate agent changes default to output Locale", () => {

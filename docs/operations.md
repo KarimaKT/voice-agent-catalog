@@ -108,6 +108,43 @@ If `/api/speech/token` returns 502:
 Avatar relay failure falls back to audio-only TTS. Basic TTS/STT can still work
 when real-time avatar relay is unavailable.
 
+### Avatar lifecycle and cost control
+
+Text-only is the default. **Read typed replies aloud** and **Avatar video** are
+explicit paid-mode choices; **Start voice conversation** opts into recognition
+and spoken replies. Estimated voice and avatar rates appear before the controls.
+
+Avatar synthesis is permitted only after a successful, non-ended Copilot Studio
+connection. Demo mode does not qualify. Each avatar reply closes its synthesizer,
+WebRTC connection and received tracks when it finishes, so there is no paid
+avatar waiting between turns. Completion first releases the avatar; any final
+spoken confirmation uses audio-only playback.
+
+Stop, avatar-off, agent changes, errors, page exit and hidden tabs release
+resources. Late credentials, startup results and media tracks cannot revive a
+released session. A hung avatar start is capped at 30 seconds; a hung avatar
+reply at 120 seconds. Media failures also trigger cleanup. Azure's service-side
+idle timeout is a fallback for browser crashes, not the normal cleanup path.
+There is no central browser-session enumeration or server-side orphan sweeper.
+
+The rule uses the client's confirmed conversation and observed completion/errors;
+the SDK does not provide a continuous server-session liveness heartbeat. Remote
+expiry is detected on the next request; no avatar stays connected between requests.
+
+### Change cost wording without redeploying Teams
+
+Set the optional App Service environment variables `VOICE_COST_NOTICE` and
+`AVATAR_COST_NOTICE`. The backend returns these plain-text notices in
+`/api/config`; no Teams package or code rebuild is needed. Saving App Service
+settings restarts the host; reopen/refresh the app afterward. Never put credentials
+or internal billing details in these public notices. Empty values use the
+documented USD reference estimates, not measured bills.
+
+For example, use **Azure portal > App Service > Settings > Environment variables**.
+Update the notices when rates, region, currency or your contract change.
+Per-agent names, descriptions and welcome messages remain SharePoint-managed.
+Fixed interface labels still require a web-app build/deployment, not Teams approval.
+
 Audio-only mode waits for the browser audio element's playback-end event before reopening
 recognition, not merely the service's synthesis-completed callback. Stop pauses
 the speaker and releases that wait. Audio-only output explicitly uses RIFF WAV

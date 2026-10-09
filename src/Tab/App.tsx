@@ -167,7 +167,9 @@ export default function App() {
   const [interim, setInterim] = React.useState("");
   const [state, setState] = React.useState<TurnState>("connecting");
   const [status, setStatus] = React.useState("Preparing the app...");
-  const [avatarEnabled, setAvatarEnabled] = React.useState(true);
+  const [avatarEnabled, setAvatarEnabled] = React.useState(false);
+  const [readRepliesAloud, setReadRepliesAloud] = React.useState(false);
+  const [costNotices, setCostNotices] = React.useState<AppConfig["costNotices"]>();
   const [avatarVisible, setAvatarVisible] = React.useState(false);
   const [voiceConversationActive, setVoiceConversationActive] = React.useState(false);
   const [hostName, setHostName] = React.useState("browser");
@@ -189,6 +191,7 @@ export default function App() {
   const autoSubmitTimerRef = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const turnInFlightRef = React.useRef(false);
   const catalogLoadInFlightRef = React.useRef(false);
+  const sessionEpochRef = React.useRef(0);
 
   React.useEffect(() => {
     let disposed = false;
@@ -226,6 +229,7 @@ export default function App() {
           return;
         }
         configRef.current = config;
+        setCostNotices(config.costNotices);
         demoEmailRecipientRef.current = identityContext.loginHint;
         const identity = new MicrosoftIdentity(config, identityContext);
         identityRef.current = identity;
@@ -255,12 +259,30 @@ export default function App() {
     }
 
     void initialize();
+    const releaseOnExit = () => {
+      sessionEpochRef.current++;
+      setVoiceConversation(false);
+      void speechRef.current?.close().catch(reportCleanupError);
+      setAvatarVisible(false);
+      setState((current) =>
+        current === "complete" || current === "error" || current === "thinking" ? current : "ready");
+      setStatus("Audio/video released while away. Restart voice when ready.");
+    };
+    const releaseWhenHidden = () => {
+      if (document.hidden) releaseOnExit();
+    };
+    window.addEventListener("pagehide", releaseOnExit);
+    document.addEventListener("visibilitychange", releaseWhenHidden);
     return () => {
       disposed = true;
+      sessionEpochRef.current++;
+      voiceConversationActiveRef.current = false;
+      window.removeEventListener("pagehide", releaseOnExit);
+      document.removeEventListener("visibilitychange", releaseWhenHidden);
       if (autoSubmitTimerRef.current) {
         clearTimeout(autoSubmitTimerRef.current);
       }
-      void speechRef.current?.close();
+      void speechRef.current?.close().catch(reportCleanupError);
     };
   }, []);
 
@@ -270,6 +292,11 @@ export default function App() {
       behavior: "smooth",
     });
   }, [messages, interim]);
+
+  function reportCleanupError(error: unknown): void {
+    const message = error instanceof Error ? error.message : "Speech cleanup failed.";
+    setMessages((current) => [...current, createMessage("system", `Speech cleanup: ${message}`)]);
+  }
 
   async function loadCatalog(): Promise<void> {
     const config = configRef.current;
@@ -315,6 +342,7 @@ export default function App() {
     const config = configRef.current;
     const identity = identityRef.current;
     if (!config || !identity) return;
+    const epoch = ++sessionEpochRef.current;
     const selected = agents.find((agent) => agent.id === selectedAgentId);
     setState("connecting");
     setStatus(`Connecting to ${selected?.displayName || "the selected agent"}...`);
@@ -323,21 +351,26 @@ export default function App() {
         throw new Error("Choose an authorized agent with the supported Standard harness transport.");
       }
       setSelectedAgentId(selected.id);
+      await speechRef.current?.setConversationActive(false);
       await speechRef.current?.setAgent(selected);
       speechRef.current?.setInputLanguage(inputLanguage);
       setAvatarVisible(false);
-      agentClientRef.current = config.demoMode
+      const client = config.demoMode
         ? new DemoAgentClient(selected, demoEmailRecipientRef.current)
         : new CopilotAgentClient(identity, selected);
-      const turn = await agentClientRef.current.connect();
+      const turn = await client.connect();
+      if (epoch !== sessionEpochRef.current) return;
+      agentClientRef.current = client;
       const completed = turn.completed === true ||
         turn.messages.some((message) => completesConversation(selected, message.text));
       const welcome =
         turn.messages.length > 0
           ? turn.messages
           : [{ text: completed ? "Conversation complete." : selected.welcomeMessage }];
+      const narrate = readRepliesAloud || avatarEnabled || voiceConversationActiveRef.current;
       setMessages(welcome.map((message) => createMessage("agent", message)));
       if (completed) setVoiceConversation(false);
+      await speechRef.current?.setConversationActive(!completed && !config.demoMode);
       setState(completed ? "complete" : "ready");
       setStatus(completed ? "Conversation complete" : `${selected.displayName} is ready`);
       await speakMessages(
@@ -345,8 +378,11 @@ export default function App() {
           .map((message) => message.speak || toSpokenText(message.text))
           .filter(Boolean),
         completed,
+        epoch,
+        narrate,
       );
     } catch (error) {
+      if (epoch !== sessionEpochRef.current) return;
       agentClientRef.current = undefined;
       handleError(error, `Could not connect to ${selected?.displayName || "the selected agent"}.`);
     }
@@ -360,6 +396,8 @@ export default function App() {
       return;
     }
     turnInFlightRef.current = true;
+    const epoch = sessionEpochRef.current;
+    const client = agentClientRef.current;
     if (autoSubmitTimerRef.current) {
       clearTimeout(autoSubmitTimerRef.current);
       autoSubmitTimerRef.current = undefined;
@@ -371,7 +409,8 @@ export default function App() {
       setMessages((current) => [...current, createMessage("user", text)]);
       setState("thinking");
       setStatus(`${selectedAgent?.displayName || "The agent"} is thinking...`);
-      const turn = await agentClientRef.current.send(typeof input === "string" ? text : input);
+      const turn = await client.send(typeof input === "string" ? text : input);
+      if (client !== agentClientRef.current) return;
       if (turn.messages.length === 0 && !turn.completed) {
         throw new Error(`${selectedAgent?.displayName || "The agent"} returned no message.`);
       }
@@ -403,15 +442,21 @@ export default function App() {
           ? `https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(turn.emailDraft.to)}&subject=${encodeURIComponent(turn.emailDraft.subject)}&body=${encodeURIComponent(turn.emailDraft.body)}`
           : "",
       );
+      const narrate = readRepliesAloud || avatarEnabled || voiceConversationActiveRef.current;
       if (completed) {
         setVoiceConversation(false);
+        await speechRef.current?.setConversationActive(false);
+        setAvatarVisible(false);
         setState("complete");
         setStatus("Conversation complete");
-        await speakMessages(spoken, true);
+        await speakMessages(spoken, true, epoch, narrate);
       } else {
+        if (epoch === sessionEpochRef.current && !document.hidden) {
+          await speechRef.current?.setConversationActive(!configRef.current?.demoMode);
+        }
         setState("ready");
         setStatus("Your turn");
-        await speakMessages(spoken);
+        await speakMessages(spoken, false, epoch, narrate);
       }
     } catch (error) {
       handleError(error, `${selectedAgent?.displayName || "The agent"} could not complete that turn.`);
@@ -493,23 +538,38 @@ export default function App() {
       await connect();
       return;
     }
+    await speechRef.current?.setConversationActive(!configRef.current?.demoMode);
     await startListening(true);
   }
 
   async function stopVoiceConversation(): Promise<void> {
+    sessionEpochRef.current++;
     setVoiceConversation(false);
-    await speechRef.current?.stopListening().catch(() => undefined);
-    await speechRef.current?.stopSpeaking();
-    if (state !== "complete" && state !== "error") {
+    try {
+      await speechRef.current?.setConversationActive(false);
+    } catch (error) {
+      reportCleanupError(error);
+    }
+    setAvatarVisible(false);
+    if (state === "thinking") {
+      setStatus("Voice stopped; waiting for the in-flight agent reply.");
+    } else if (state !== "complete" && state !== "error") {
       setState("ready");
       setStatus("Voice conversation stopped");
     }
   }
 
-  async function speakMessages(texts: string[], preserveCompletion = false): Promise<void> {
-    if (!speechRef.current) {
+  async function speakMessages(
+    texts: string[],
+    preserveCompletion = false,
+    epoch = sessionEpochRef.current,
+    narrate = readRepliesAloud || avatarEnabled || voiceConversationActiveRef.current,
+  ): Promise<void> {
+    if (!speechRef.current || epoch !== sessionEpochRef.current || document.hidden) {
       return;
     }
+    const useAvatar = avatarEnabled && !preserveCompletion && !configRef.current?.demoMode;
+    if (!narrate) return;
     if (texts.length === 0) {
       if (voiceConversationActiveRef.current && !preserveCompletion) {
         await startListening(true);
@@ -520,18 +580,23 @@ export default function App() {
     setStatus(`${selectedAgent?.displayName || "The agent"} is speaking...`);
     try {
       for (const text of texts) {
-        await speechRef.current.speak(text, avatarEnabled);
+        if (epoch !== sessionEpochRef.current || document.hidden) return;
+        await speechRef.current.speak(text, useAvatar);
       }
     } catch (error) {
-      if (avatarEnabled) {
+      if (epoch !== sessionEpochRef.current || document.hidden) return;
+      if (useAvatar) {
         setAvatarEnabled(false);
         setMessages((current) => [
           ...current,
           createMessage("system", "Avatar video is unavailable; continuing with audio-only mode."),
         ]);
         for (const text of texts) {
+          if (epoch !== sessionEpochRef.current) return;
           await speechRef.current.speak(text, false);
         }
+        if (epoch !== sessionEpochRef.current || document.hidden) return;
+        setAvatarVisible(false);
       } else {
         handleError(error, "Speech playback failed.");
         return;
@@ -545,7 +610,11 @@ export default function App() {
   }
 
   function handleError(error: unknown, fallback: string): void {
+    sessionEpochRef.current++;
     setVoiceConversation(false);
+    agentClientRef.current = undefined;
+    void speechRef.current?.setConversationActive(false).catch(reportCleanupError);
+    setAvatarVisible(false);
     const message = error instanceof Error ? error.message : fallback;
     setState("error");
     setStatus(message || fallback);
@@ -556,8 +625,9 @@ export default function App() {
     if (agentId === selectedAgentId) {
       return;
     }
-    await speechRef.current?.stopSpeaking();
-    await speechRef.current?.stopListening().catch(() => undefined);
+    sessionEpochRef.current++;
+    await speechRef.current?.setConversationActive(false);
+    setAvatarVisible(false);
     setVoiceConversation(false);
     agentClientRef.current = undefined;
     setMessages([]);
@@ -676,6 +746,17 @@ export default function App() {
             voice-friendly wording. Agent-authored cards and controls may affect the
             experience. Attachments are displayed in chat, not read aloud.
           </p>
+          <section className="speech-cost-notice" aria-label="Voice and avatar costs">
+            <strong>Choose paid audio/video consciously</strong>
+            <p>{costNotices?.voice || "Voice pricing is loading; check the rates before starting."}</p>
+            <p>{costNotices?.avatar || "Avatar pricing is loading; check the rates before enabling video."}</p>
+            <small>
+              Estimates, not a live bill. Hosting, Copilot Studio and licensing are additional.
+              Charges go to the deployment owner's services. Text-only mode uses no Speech.
+              Avatar connects only for a reply in an active Copilot Studio conversation and
+              disconnects after that reply.
+            </small>
+          </section>
           <div className="transcript" ref={transcriptRef} aria-live="polite">
             {!connected && (
               <div className="welcome-card">
@@ -812,11 +893,22 @@ export default function App() {
             <label className="toggle">
               <input
                 type="checkbox"
+                checked={readRepliesAloud}
+                disabled={!costNotices}
+                onChange={(event) => setReadRepliesAloud(event.target.checked)}
+              />
+              <span>Read typed replies aloud (paid voice)</span>
+            </label>
+            <label className="toggle">
+              <input
+                type="checkbox"
                 checked={avatarEnabled}
+                disabled={!costNotices || configRef.current?.demoMode}
                 onChange={(event) => {
                   setAvatarEnabled(event.target.checked);
                   if (!event.target.checked) {
                     setAvatarVisible(false);
+                    void speechRef.current?.stopAvatar().catch(reportCleanupError);
                   }
                 }}
               />

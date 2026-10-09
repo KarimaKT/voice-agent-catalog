@@ -24,6 +24,10 @@ export interface AppConfig {
   catalogEnabled: boolean;
   demoMode: boolean;
   demoAgents?: AgentDefinition[];
+  costNotices: {
+    voice: string;
+    avatar: string;
+  };
 }
 
 export interface CatalogResult {

@@ -142,7 +142,20 @@ h1 {
 
 .conversation-panel {
   display: grid;
-  grid-template-rows: auto minmax(300px, 1fr) auto;
+  grid-template-rows: auto auto auto minmax(300px, 1fr) auto;
+}
+
+.speech-cost-notice {
+  padding: 14px 24px;
+  border-bottom: 1px solid #dfe1ee;
+  background: #f5f6fb;
+  color: #4c5372;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.speech-cost-notice p {
+  margin: 6px 0;
 }
 
 .panel-heading {
