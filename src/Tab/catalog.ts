@@ -2,7 +2,6 @@ import type {
   AgentDefinition,
   AppConfig,
   CatalogResult,
-  CatalogUser,
 } from "./types";
 
 type CatalogAgentRecord = Record<string, unknown>;
@@ -34,41 +33,14 @@ function isEnabled(value: unknown): boolean {
   return value === true || value === 1 || value === "1" || value === "true";
 }
 
-function normalizeEmail(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
+function requiredBoolean(value: unknown, field: string, itemId: string): boolean {
+  if (value === true || value === 1 || value === "1" || value === "true") {
+    return true;
   }
-  const email = value.trim().toLocaleLowerCase();
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : undefined;
-}
-
-function normalizeUsers(value: unknown): CatalogUser[] {
-  const source = Array.isArray(value) ? value : value ? [value] : [];
-  return source.flatMap((entry) => {
-    if (typeof entry === "string") {
-      const email = normalizeEmail(entry);
-      return email ? [{ email }] : [];
-    }
-    if (!entry || typeof entry !== "object") {
-      return [];
-    }
-    const user = entry as Record<string, unknown>;
-    const email =
-      normalizeEmail(user.Email) ||
-      normalizeEmail(user.email) ||
-      normalizeEmail(user.UserPrincipalName) ||
-      normalizeEmail(user.userPrincipalName);
-    if (!email) {
-      return [];
-    }
-    return [{
-      email,
-      displayName:
-        optionalString(user.DisplayName) ||
-        optionalString(user.displayName) ||
-        optionalString(user.Title),
-    }];
-  });
+  if (value === false || value === 0 || value === "0" || value === "false") {
+    return false;
+  }
+  throw new Error(`Catalog item ${itemId} has an invalid ${field}.`);
 }
 
 function safeHttpUrl(value: unknown): string | undefined {
@@ -87,7 +59,6 @@ function safeHttpUrl(value: unknown): string | undefined {
 function mapAgent(
   record: CatalogAgentRecord,
   index: number,
-  defaults: AgentDefinition,
 ): AgentDefinition | undefined {
   const itemId = optionalString(record.Id) || optionalString(record.id) || String(index + 1);
   if (!isEnabled(record.Enabled)) {
@@ -102,16 +73,24 @@ function mapAgent(
   if (!schemaNamePattern.test(schemaName)) {
     throw new Error(`Catalog item ${itemId} has an invalid SchemaName.`);
   }
+  const audienceValue = requiredString(record.Audience, "Audience", itemId).toLowerCase();
+  if (audienceValue !== "everyone" && audienceValue !== "restricted") {
+    throw new Error(`Catalog item ${itemId} has an invalid Audience.`);
+  }
 
+  const endsConversation = requiredBoolean(record.EndsConversation, "EndsConversation", itemId);
+  const displayName = requiredString(record.Title, "Title", itemId);
   return {
     id: itemId,
-    displayName: requiredString(record.Title, "Title", itemId),
+    displayName,
     description: optionalString(record.Description),
     environmentId,
     schemaName,
-    completionPhrase:
-      optionalString(record.CompletionPhrase) || defaults.completionPhrase,
-    welcomeMessage: optionalString(record.WelcomeMessage) || defaults.welcomeMessage,
+    completionPhrase: endsConversation
+      ? requiredString(record.CompletionPhrase, "CompletionPhrase", itemId)
+      : optionalString(record.CompletionPhrase) || "",
+    endsConversation,
+    welcomeMessage: optionalString(record.WelcomeMessage) || `Ready to chat with ${displayName}.`,
     locale: requiredString(record.Locale, "Locale", itemId),
     voiceName: requiredString(record.VoiceName, "VoiceName", itemId),
     avatarCharacter: requiredString(
@@ -120,27 +99,25 @@ function mapAgent(
       itemId,
     ),
     avatarStyle: requiredString(record.AvatarStyle, "AvatarStyle", itemId),
-    audience:
-      optionalString(record.Audience)?.toLocaleLowerCase() === "restricted"
-        ? "Restricted"
-        : "Everyone",
-    allowedUsers: normalizeUsers(record.AllowedUsers),
+    audience: audienceValue === "restricted"
+      ? "Restricted"
+      : "Everyone",
     harness: optionalString(record.Harness),
   };
 }
 
 export async function loadAgentCatalog(
   config: AppConfig,
-  userEmail?: string,
+  accessToken: string,
 ): Promise<CatalogResult> {
   if (!config.catalogEnabled) {
-    return { agents: [config.defaultAgent], canManageCatalog: false };
+    throw new CatalogAccessError("The SharePoint agent catalog is not configured.");
   }
 
   const response = await fetch("/api/catalog", {
     headers: {
       Accept: "application/json",
-      ...(userEmail ? { "X-Voice-Catalog-User": userEmail } : {}),
+      Authorization: `Bearer ${accessToken}`,
     },
   });
   if (!response.ok) {
@@ -155,18 +132,9 @@ export async function loadAgentCatalog(
     throw new Error("Catalog flow returned an invalid response.");
   }
 
-  const normalizedEmail = normalizeEmail(userEmail);
   const agents = result.agents
-    .map((record, index) => mapAgent(record, index, config.defaultAgent))
+    .map((record, index) => mapAgent(record, index))
     .filter((agent): agent is AgentDefinition => Boolean(agent))
-    .filter(
-      (agent) =>
-        agent.audience !== "Restricted" ||
-        Boolean(
-          normalizedEmail &&
-            agent.allowedUsers?.some((user) => user.email === normalizedEmail),
-        ),
-    )
     .sort((left, right) => left.displayName.localeCompare(right.displayName));
 
   if (agents.length === 0) {

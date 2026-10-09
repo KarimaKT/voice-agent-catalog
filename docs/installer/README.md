@@ -185,6 +185,18 @@ npx -y --package @microsoft/m365agentstoolkit-cli atk deploy `
 Provisioning creates or updates App Service, Speech, Key Vault, Application
 Insights, Log Analytics, Entra, and the Teams app registration.
 
+Provisioning first persists the app API scope using `aad.api.manifest.json`,
+then applies preauthorization using `aad.manifest.json`. Preserve this order.
+The deployment lifecycle runs tests and typecheck before build/zip deployment.
+
+For simple maker onboarding, install the
+[URL-registration flow](../../catalog/agent-registration-flow.template.json)
+with an authenticated maker-owned Dataverse connection. On the new-item form,
+show only the agent URL; keep profile/access fields on the edit form and default
+new entries to disabled. The flow resolves metadata only in the configured
+environment. Configure additional environments explicitly rather than inventing
+schema names or routing arbitrary URLs.
+
 The product and Teams UX name is **Voice Agent Catalog**. For an existing
 installation, keep the generated `TEAMS_APP_ID`, Entra client/object IDs, and
 resource identifiers in the environment files and rerun provisioning so the
@@ -228,7 +240,7 @@ The host must provide these runtime environment values securely:
 - `SPEECH_REGION`
 - `SPEECH_ENDPOINT`
 - `SPEECH_KEY`
-- optional catalog, locale, voice, avatar, and demo settings
+- the required production catalog flow URL, locale, voice, avatar, and optional demo settings
 
 Use the destination platform's secret manager for `SPEECH_KEY` and
 `CATALOG_FLOW_URL`. Do not place them in an image, repository, client bundle, or
@@ -282,6 +294,9 @@ Verify:
 - Application Insights contains operational failures but no transcripts.
 
 See [operations and troubleshooting](../operations.md) for detailed diagnostics.
+Complete [all release gates](../release-validation.md) before organizational
+catalog submission. A successful maker test-panel interview is not a substitute
+for published-agent verification through the deployed app.
 
 ## Handoff and operations
 

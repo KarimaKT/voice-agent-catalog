@@ -1,0 +1,168 @@
+{
+  "properties": {
+    "displayName": "Voice Agent Catalog - register agent URL",
+    "state": "Started",
+    "connectionReferences": {
+      "shared_sharepointonline": {
+        "connectionName": "__CONNECTION_NAME__",
+        "source": "Embedded",
+        "id": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline"
+      },
+      "shared_commondataserviceforapps": {
+        "connectionName": "__DATAVERSE_CONNECTION__",
+        "source": "Embedded",
+        "id": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
+      }
+    },
+    "definition": {
+      "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+      "contentVersion": "1.0.0.0",
+      "parameters": {
+        "$connections": { "defaultValue": {}, "type": "Object" },
+        "$authentication": { "defaultValue": {}, "type": "SecureObject" }
+      },
+      "triggers": {
+        "When_item_created": {
+          "type": "OpenApiConnection",
+          "recurrence": { "frequency": "Minute", "interval": 1 },
+          "splitOn": "@triggerOutputs()?['body/value']",
+          "inputs": {
+            "host": {
+              "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+              "connectionName": "shared_sharepointonline",
+              "operationId": "GetOnNewItems"
+            },
+            "parameters": { "dataset": "__SITE_URL__", "table": "__LIST_ID__" },
+            "authentication": "@parameters('$authentication')"
+          },
+          "runtimeConfiguration": { "secureData": { "properties": ["inputs", "outputs"] } }
+        }
+      },
+      "actions": {
+        "Resolve_agent": {
+          "type": "Scope",
+          "runAfter": {},
+          "actions": {
+            "Path_segments": {
+              "type": "Compose",
+              "inputs": "@split(uriPath(trim(triggerBody()?['AgentUrl'])),'/')",
+              "runAfter": {}
+            },
+            "Validate_URL": {
+              "type": "If",
+              "expression": "@and(equals(toLower(uriScheme(trim(triggerBody()?['AgentUrl']))),'https'),contains(createArray('copilotstudio.microsoft.com','copilotstudio.preview.microsoft.com'),toLower(uriHost(trim(triggerBody()?['AgentUrl'])))),equals(outputs('Path_segments')?[1],'environments'),equals(toLower(outputs('Path_segments')?[2]),'__ENVIRONMENT_ID__'),contains(createArray('bots','agents'),outputs('Path_segments')?[3]),equals(length(coalesce(outputs('Path_segments')?[4],'')),36))",
+              "runAfter": { "Path_segments": ["Succeeded"] },
+              "actions": {
+                "Read_agent_metadata": {
+                  "type": "OpenApiConnection",
+                  "inputs": {
+                    "host": {
+                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps",
+                      "connectionName": "shared_commondataserviceforapps",
+                      "operationId": "GetItem"
+                    },
+                    "parameters": {
+                      "entityName": "bots",
+                      "recordId": "@outputs('Path_segments')?[4]",
+                      "$select": "name,schemaname,configuration"
+                    },
+                    "authentication": "@parameters('$authentication')"
+                  },
+                  "runtimeConfiguration": { "secureData": { "properties": ["inputs", "outputs"] } },
+                  "runAfter": {}
+                },
+                "Fill_catalog_draft": {
+                  "type": "OpenApiConnection",
+                  "inputs": {
+                    "host": {
+                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+                      "connectionName": "shared_sharepointonline",
+                      "operationId": "PatchItem"
+                    },
+                    "parameters": {
+                      "dataset": "__SITE_URL__",
+                      "table": "__LIST_ID__",
+                      "id": "@triggerBody()?['ID']",
+                      "item/AgentUrl": "@triggerBody()?['AgentUrl']",
+                      "item/Locale": "@coalesce(triggerBody()?['Locale'],'en-US')",
+                      "item/VoiceName": "@coalesce(triggerBody()?['VoiceName'],'en-US-AvaMultilingualNeural')",
+                      "item/AvatarCharacter": "@coalesce(triggerBody()?['AvatarCharacter'],'lisa')",
+                      "item/AvatarStyle": "@coalesce(triggerBody()?['AvatarStyle'],'casual-sitting')",
+                      "item/Audience/Value": "@coalesce(triggerBody()?['Audience']?['Value'],'Everyone')",
+                      "item/Title": "@body('Read_agent_metadata')?['name']",
+                      "item/__FIELD_ENVIRONMENTID__": "__ENVIRONMENT_ID__",
+                      "item/__FIELD_SCHEMANAME__": "@body('Read_agent_metadata')?['schemaname']",
+                      "item/__FIELD_ENABLED__": "FALSE",
+                      "item/EndsConversation": false,
+                      "item/Harness": "@if(equals(json(body('Read_agent_metadata')?['configuration'])?['recognizer']?['$kind'],'GenerativeAIRecognizer'),'standard',if(equals(json(body('Read_agent_metadata')?['configuration'])?['recognizer']?['$kind'],'CLICopilotRecognizer'),'github-copilot','unknown'))",
+                      "item/RegistrationStatus": "Ready for catalog review. Metadata resolved; agent sharing and runtime testing still required."
+                    },
+                    "authentication": "@parameters('$authentication')"
+                  },
+                  "runtimeConfiguration": { "secureData": { "properties": ["inputs", "outputs"] } },
+                  "runAfter": { "Read_agent_metadata": ["Succeeded"] }
+                }
+              },
+              "else": {
+                "actions": {
+                  "Reject_URL": {
+                    "type": "OpenApiConnection",
+                    "inputs": {
+                      "host": {
+                        "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+                        "connectionName": "shared_sharepointonline",
+                        "operationId": "PatchItem"
+                      },
+                      "parameters": {
+                        "dataset": "__SITE_URL__",
+                        "table": "__LIST_ID__",
+                        "id": "@triggerBody()?['ID']",
+                        "item/AgentUrl": "@triggerBody()?['AgentUrl']",
+                        "item/Locale": "@coalesce(triggerBody()?['Locale'],'en-US')",
+                        "item/VoiceName": "@coalesce(triggerBody()?['VoiceName'],'en-US-AvaMultilingualNeural')",
+                        "item/AvatarCharacter": "@coalesce(triggerBody()?['AvatarCharacter'],'lisa')",
+                        "item/AvatarStyle": "@coalesce(triggerBody()?['AvatarStyle'],'casual-sitting')",
+                        "item/Audience/Value": "@coalesce(triggerBody()?['Audience']?['Value'],'Everyone')",
+                        "item/__FIELD_ENABLED__": "FALSE",
+                        "item/RegistrationStatus": "Needs attention: paste a full Copilot Studio agent URL from the configured environment."
+                      },
+                      "authentication": "@parameters('$authentication')"
+                    },
+                    "runAfter": {}
+                  }
+                }
+              }
+            }
+          }
+        },
+        "Report_lookup_failure": {
+          "type": "OpenApiConnection",
+          "inputs": {
+            "host": {
+              "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+              "connectionName": "shared_sharepointonline",
+              "operationId": "PatchItem"
+            },
+            "parameters": {
+              "dataset": "__SITE_URL__",
+              "table": "__LIST_ID__",
+              "id": "@triggerBody()?['ID']",
+              "item/AgentUrl": "@triggerBody()?['AgentUrl']",
+              "item/Locale": "@coalesce(triggerBody()?['Locale'],'en-US')",
+              "item/VoiceName": "@coalesce(triggerBody()?['VoiceName'],'en-US-AvaMultilingualNeural')",
+              "item/AvatarCharacter": "@coalesce(triggerBody()?['AvatarCharacter'],'lisa')",
+              "item/AvatarStyle": "@coalesce(triggerBody()?['AvatarStyle'],'casual-sitting')",
+              "item/Audience/Value": "@coalesce(triggerBody()?['Audience']?['Value'],'Everyone')",
+              "item/__FIELD_ENABLED__": "FALSE",
+              "item/RegistrationStatus": "Needs attention: metadata lookup failed. Check the URL, maker connection, and agent access. Nothing was enabled."
+            },
+            "authentication": "@parameters('$authentication')"
+          },
+          "runtimeConfiguration": { "secureData": { "properties": ["inputs", "outputs"] } },
+          "runAfter": { "Resolve_agent": ["Failed", "TimedOut"] }
+        }
+      },
+      "outputs": {}
+    }
+  }
+}

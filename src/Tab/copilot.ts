@@ -1,6 +1,7 @@
 import {
   createNestablePublicClientApplication,
   createStandardPublicClientApplication,
+  InteractionRequiredAuthError,
   type AccountInfo,
   type IPublicClientApplication,
 } from "@azure/msal-browser";
@@ -19,6 +20,8 @@ import type {
   AgentDefinition,
   AppConfig,
 } from "./types";
+import { getHarnessSupport, voiceInterfaceInstructions } from "./agent-behavior";
+import { safeHttpUrl } from "./adaptive-card-policy";
 
 function createConnectionSettings(agent: AgentDefinition): ConnectionSettings {
   return new ConnectionSettings({
@@ -32,6 +35,7 @@ function createConnectionSettings(agent: AgentDefinition): ConnectionSettings {
 export interface AgentTurn {
   messages: AgentMessage[];
   conversationId: string;
+  completed?: boolean;
   emailDraft?: {
     to: string;
     subject: string;
@@ -49,22 +53,63 @@ export interface AgentMessage {
 
 export interface AgentClient {
   connect(): Promise<AgentTurn>;
-  send(text: string): Promise<AgentTurn>;
+  send(input: string | AgentAction): Promise<AgentTurn>;
+}
+
+export function createMessageActivity(
+  input: string | AgentAction,
+  conversationId: string,
+  locale?: string,
+): Activity {
+  const activity = new Activity(ActivityTypes.Message);
+  activity.conversation = { id: conversationId };
+  activity.locale = locale;
+  if (typeof input === "string") {
+    activity.text = input;
+  } else if (input.kind === "submit") {
+    activity.value = input.value ?? {};
+  } else {
+    activity.text = typeof input.value === "string" ? input.value : input.title;
+  }
+  return activity;
+}
+
+export async function collectAgentTurn(
+  activities: AsyncIterable<Activity>,
+  conversationId = "",
+): Promise<AgentTurn> {
+  const turn: AgentTurn = { messages: [], conversationId, completed: false };
+  for await (const activity of activities) {
+    if (activity.conversation?.id) turn.conversationId = activity.conversation.id;
+    if (activity.type === ActivityTypes.EndOfConversation) {
+      turn.completed = true;
+    } else if (activity.type === ActivityTypes.Message) {
+      const message = normalizeActivity(activity);
+      if (message.text || message.speak || message.attachments?.length ||
+          message.citations?.length || message.suggestedActions?.length) {
+        turn.messages.push(message);
+      }
+    }
+  }
+  return turn;
 }
 
 export interface TeamsIdentityContext {
   isTeamsHosted: boolean;
   supportsNestedAuth: boolean;
-  homeAccountId?: string;
   loginHint?: string;
   tenantId?: string;
 }
 
 export class MicrosoftIdentity {
   private readonly msalPromise: Promise<IPublicClientApplication>;
+  private readonly tokenRequests = new Map<string, Promise<string>>();
   private account?: AccountInfo;
 
-  constructor(config: AppConfig, private readonly teamsContext: TeamsIdentityContext) {
+  constructor(
+    private readonly config: AppConfig,
+    private readonly teamsContext: TeamsIdentityContext,
+  ) {
     const auth = {
       clientId: config.clientId,
       authority: `https://login.microsoftonline.com/${config.tenantId}`,
@@ -87,20 +132,45 @@ export class MicrosoftIdentity {
   }
 
   async acquireToken(scopes: string[], interactive = true): Promise<string> {
+    const requestKey = [...scopes].sort().join(" ");
+    const existing = this.tokenRequests.get(requestKey);
+    if (existing) {
+      return existing;
+    }
+    const request = this.acquireTokenCore(scopes, interactive);
+    this.tokenRequests.set(requestKey, request);
+    try {
+      return await request;
+    } finally {
+      this.tokenRequests.delete(requestKey);
+    }
+  }
+
+  private async acquireTokenCore(scopes: string[], interactive: boolean): Promise<string> {
     if (this.teamsContext.isTeamsHosted && !this.teamsContext.supportsNestedAuth) {
       throw new Error(
         "This Teams client does not support silent app authentication. Update Teams and try again.",
       );
     }
+    if (this.teamsContext.tenantId &&
+        this.teamsContext.tenantId.toLowerCase() !== this.config.tenantId.toLowerCase()) {
+      throw new Error("The Teams tenant does not match this app's configured tenant.");
+    }
 
     const msal = await this.msalPromise;
-    this.account ||= msal.getActiveAccount() ?? undefined;
-    this.account ||=
-      msal.getAccount({
-        homeAccountId: this.teamsContext.homeAccountId,
-        loginHint: this.teamsContext.loginHint,
-        tenantId: this.teamsContext.tenantId,
-      }) ?? undefined;
+    const activeAccount = msal.getActiveAccount();
+    const cachedAccount = this.teamsContext.loginHint
+      ? msal.getAccount({
+          loginHint: this.teamsContext.loginHint,
+          tenantId: this.config.tenantId,
+        })
+      : activeAccount?.tenantId.toLowerCase() === this.config.tenantId.toLowerCase()
+        ? activeAccount
+        : msal.getAccount({ tenantId: this.config.tenantId });
+    this.account ||= cachedAccount ?? undefined;
+    if (this.account?.tenantId.toLowerCase() !== this.config.tenantId.toLowerCase()) {
+      this.account = undefined;
+    }
     if (this.account) {
       msal.setActiveAccount(this.account);
     }
@@ -112,10 +182,12 @@ export class MicrosoftIdentity {
 
     try {
       const result = await msal.acquireTokenSilent(request);
-      this.account = result.account;
+      this.activateAccount(msal, result.account);
       return result.accessToken;
     } catch (error) {
-      if (!interactive) {
+      const errorCode = (error as { errorCode?: string } | null)?.errorCode;
+      if (!interactive || !(error instanceof InteractionRequiredAuthError ||
+          (!this.account && errorCode === "no_account_error"))) {
         throw error;
       }
       try {
@@ -123,27 +195,29 @@ export class MicrosoftIdentity {
           scopes,
           loginHint: this.teamsContext.loginHint,
         });
-        this.account = result.account;
+        this.activateAccount(msal, result.account);
         return result.accessToken;
       } catch (interactiveError) {
-        const message = this.teamsContext.isTeamsHosted
-          ? "Teams could not authorize Copilot Studio. Grant the requested permission and try again; if the tenant requires admin approval, ask an administrator or use the anonymous Direct Line option."
-          : "Microsoft sign-in was cancelled or could not authorize Copilot Studio.";
-        const wrapped = new Error(message);
-        (wrapped as Error & { cause?: unknown }).cause = interactiveError;
-        throw wrapped;
+        if ((interactiveError as { errorCode?: string } | null)?.errorCode === "user_cancelled") {
+          const cancelled = new Error("Microsoft sign-in was cancelled.");
+          (cancelled as Error & { cause?: unknown }).cause = interactiveError;
+          throw cancelled;
+        }
+        throw interactiveError;
       }
     }
   }
 
-  getBestEffortUserEmail(): string | undefined {
-    return this.teamsContext.loginHint || this.account?.username || undefined;
+  private activateAccount(msal: IPublicClientApplication, account: AccountInfo | null): void {
+    if (!account || account.tenantId.toLowerCase() !== this.config.tenantId.toLowerCase()) {
+      throw new Error("Microsoft sign-in returned an account outside this app's configured tenant.");
+    }
+    this.account = account;
+    msal.setActiveAccount(account);
   }
 
-  async ensureUserIdentity(agent: AgentDefinition): Promise<string | undefined> {
-    const settings = createConnectionSettings(agent);
-    await this.acquireToken([ScopeHelper.getScopeFromSettings(settings)]);
-    return this.getBestEffortUserEmail();
+  acquireApiToken(): Promise<string> {
+    return this.acquireToken([this.config.apiScope]);
   }
 }
 
@@ -156,6 +230,9 @@ export class CopilotAgentClient {
     private readonly identity: MicrosoftIdentity,
     private readonly agent: AgentDefinition,
   ) {
+    if (!getHarnessSupport(agent.harness).supported) {
+      throw new Error(`The ${agent.harness || "unknown"} harness has no supported voice transport.`);
+    }
     this.settings = createConnectionSettings(agent);
   }
 
@@ -168,63 +245,30 @@ export class CopilotAgentClient {
       emitStartConversationEvent: false,
       locale: this.agent.locale,
     };
-    const messages: AgentMessage[] = [];
-
-    for await (const activity of this.client.startConversationStreaming(startRequest)) {
-      this.captureActivity(activity, messages);
-    }
+    const start = await collectAgentTurn(this.client.startConversationStreaming(startRequest));
+    this.conversationId = start.conversationId;
 
     if (!this.conversationId) {
       throw new Error(`${this.agent.displayName} did not return a conversation ID.`);
     }
 
-    return { messages, conversationId: this.conversationId };
+    if (start.completed) return start;
+    const setup = await this.send(voiceInterfaceInstructions(this.agent.locale));
+    return { ...setup, messages: [...start.messages, ...setup.messages] };
   }
 
-  async send(text: string): Promise<AgentTurn> {
+  async send(input: string | AgentAction): Promise<AgentTurn> {
     if (!this.client || !this.conversationId) {
       throw new Error(`Connect to ${this.agent.displayName} before sending a message.`);
     }
 
-    const activity = new Activity(ActivityTypes.Message);
-    activity.text = text;
-    activity.conversation = { id: this.conversationId };
-    const messages: AgentMessage[] = [];
-
-    for await (const reply of this.client.sendActivityStreaming(activity, this.conversationId)) {
-      this.captureActivity(reply, messages);
-    }
-
-    return { messages, conversationId: this.conversationId };
-  }
-
-  private captureActivity(activity: Activity, messages: AgentMessage[]): void {
-    if (activity.conversation?.id) {
-      this.conversationId = activity.conversation.id;
-    }
-    if (activity.type === ActivityTypes.Message) {
-      const message = normalizeActivity(activity);
-      if (
-        message.text ||
-        message.attachments?.length ||
-        message.citations?.length ||
-        message.suggestedActions?.length
-      ) {
-        messages.push(message);
-      }
-    }
-  }
-}
-
-function safeHttpUrl(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:" ? url.toString() : undefined;
-  } catch {
-    return undefined;
+    const activity = createMessageActivity(input, this.conversationId, this.agent.locale);
+    const turn = await collectAgentTurn(
+      this.client.sendActivityStreaming(activity, this.conversationId),
+      this.conversationId,
+    );
+    this.conversationId = turn.conversationId;
+    return turn;
   }
 }
 
@@ -232,60 +276,18 @@ function textValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function adaptiveCardText(value: unknown): string {
-  if (Array.isArray(value)) {
-    return value.map(adaptiveCardText).filter(Boolean).join(" ");
-  }
-  if (!value || typeof value !== "object") {
-    return "";
-  }
-  const item = value as Record<string, unknown>;
-  const ownText =
-    textValue(item.text) ||
-    (item.type === "FactSet" && Array.isArray(item.facts)
-      ? item.facts
-          .map((fact) => {
-            if (!fact || typeof fact !== "object") {
-              return "";
-            }
-            const entry = fact as Record<string, unknown>;
-            return [textValue(entry.title), textValue(entry.value)].filter(Boolean).join(" ");
-          })
-          .join(" ")
-      : "");
-  return [
-    ownText,
-    adaptiveCardText(item.items),
-    adaptiveCardText(item.columns),
-  ].filter(Boolean).join(" ");
-}
-
-function normalizeActivity(activity: Activity): AgentMessage {
+export function normalizeActivity(activity: Activity): AgentMessage {
   const attachments: AgentAttachment[] = [];
-  const attachmentSpeech: string[] = [];
   for (const item of activity.attachments || []) {
-    const contentType = item.contentType.toLocaleLowerCase();
+    const contentType = String(item.contentType || "").toLocaleLowerCase();
     const url = safeHttpUrl(item.contentUrl);
     if (contentType === "application/vnd.microsoft.card.adaptive" && item.content) {
       const card = item.content as Record<string, unknown>;
       attachments.push({
         kind: "adaptiveCard",
         name: textValue(item.name),
-        body: Array.isArray(card.body)
-          ? card.body.filter((entry): entry is Record<string, unknown> =>
-              Boolean(entry && typeof entry === "object"),
-            )
-          : [],
-        actions: Array.isArray(card.actions)
-          ? card.actions.filter((entry): entry is Record<string, unknown> =>
-              Boolean(entry && typeof entry === "object"),
-            )
-          : [],
+        content: card,
       });
-      const cardSpeech = adaptiveCardText(card.body);
-      if (cardSpeech) {
-        attachmentSpeech.push(cardSpeech);
-      }
     } else if (url && contentType.startsWith("image/")) {
       attachments.push({
         kind: "image",
@@ -299,6 +301,12 @@ function normalizeActivity(activity: Activity): AgentMessage {
         url,
         name: textValue(item.name) || "Open attachment",
         contentType: item.contentType,
+      });
+    } else {
+      attachments.push({
+        kind: "unsupported",
+        name: textValue(item.name),
+        reason: "This attachment cannot be displayed safely. Ask the agent for a supported card or HTTP(S) link.",
       });
     }
   }
@@ -339,18 +347,24 @@ function normalizeActivity(activity: Activity): AgentMessage {
       const type = String(action.type || "").toLocaleLowerCase();
       const value = textValue(action.value);
       if (type === "openurl") {
-        const url = safeHttpUrl(value);
-        return url ? [{ title, url }] : [];
+        const url = safeHttpUrl(action.value);
+        return url ? [{ title, url }] : [{ title, unsupported: "An unsafe action link was blocked." }];
       }
-      return [{ title, value: value || title }];
+      if (type === "postback" || type === "imback" || type === "messageback") {
+        if (typeof action.value === "object" && action.value !== null) {
+          return [{ title, kind: "submit", value: action.value }];
+        }
+        return [{ title, kind: "message", value: value || title }];
+      }
+      return [{ title, unsupported: `Unsupported suggested action: ${type || "unknown"}. Use text to respond.` }];
     });
 
   return {
     text: activity.text?.trim() || "",
     speak:
       activity.speak?.trim() ||
-      (!activity.text?.trim()
-        ? activity.summary?.trim() || attachmentSpeech.join(" ")
+      (!activity.text?.trim() && attachments.length === 0
+        ? activity.summary?.trim()
         : undefined) ||
       undefined,
     attachments: attachments.length ? attachments : undefined,
@@ -432,7 +446,9 @@ export class DemoAgentClient implements AgentClient {
     };
   }
 
-  async send(text: string): Promise<AgentTurn> {
+  async send(input: string | AgentAction): Promise<AgentTurn> {
+    const text = typeof input === "string" ? input :
+      typeof input.value === "string" ? input.value : input.title;
     const answer = text.trim();
     if (!answer) {
       throw new Error("Enter an answer before continuing.");

@@ -159,6 +159,14 @@ h1 {
   font-size: 1.25rem;
 }
 
+.transport-message {
+  display: block;
+  max-width: 260px;
+  margin-top: 4px;
+  color: #a4262c;
+  line-height: 1.3;
+}
+
 .panel-heading p {
   margin-bottom: 0;
   color: #777d98;
@@ -284,8 +292,7 @@ h1 {
   margin: 10px 0 0;
 }
 
-.message-image img,
-.adaptive-image {
+.message-image img {
   display: block;
   max-width: min(100%, 560px);
   max-height: 420px;
@@ -307,7 +314,8 @@ h1 {
 }
 
 .adaptive-card {
-  min-width: min(420px, 100%);
+  width: min(420px, 100%);
+  max-width: 100%;
   margin-top: 10px;
   padding: 14px;
   border: 1px solid #dfe1ee;
@@ -316,36 +324,21 @@ h1 {
   color: #172044;
 }
 
-.adaptive-text + .adaptive-text {
-  margin-top: 8px;
-}
-
-.adaptive-container {
-  padding: 6px 0;
-}
-
-.adaptive-columns {
-  display: flex;
-  gap: 12px;
-}
-
-.adaptive-columns > * {
-  flex: 1;
-}
-
-.adaptive-facts {
-  display: grid;
-  grid-template-columns: minmax(90px, auto) 1fr;
-  gap: 5px 12px;
-  margin: 8px 0;
-}
-
-.adaptive-facts dt {
-  font-weight: 700;
-}
-
-.adaptive-facts dd {
+.adaptive-card-controls {
+  min-width: 0;
   margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.adaptive-card .ac-input {
+  max-width: 100%;
+}
+
+.card-fallback {
+  margin-top: 8px;
+  color: #765321;
+  font-size: 0.82rem;
 }
 
 .message-actions {
@@ -639,4 +632,9 @@ h1 {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
   }
+}
+.voice-interface-note {
+  color: #526079;
+  font-size: 0.8rem;
+  padding: 0 1rem;
 }

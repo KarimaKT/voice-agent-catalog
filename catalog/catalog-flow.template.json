@@ -1,0 +1,157 @@
+{
+  "properties": {
+    "displayName": "Voice Agent Catalog bridge",
+    "state": "Started",
+    "connectionReferences": {
+      "shared_sharepointonline": {
+        "connectionName": "__CONNECTION_NAME__",
+        "source": "Embedded",
+        "id": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline"
+      }
+    },
+    "definition": {
+      "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+      "contentVersion": "1.0.0.0",
+      "parameters": {
+        "$connections": { "defaultValue": {}, "type": "Object" },
+        "$authentication": { "defaultValue": {}, "type": "SecureObject" }
+      },
+      "triggers": {
+        "manual": {
+          "type": "Request",
+          "kind": "Http",
+          "inputs": {
+            "schema": {
+              "type": "object",
+              "required": ["operation", "userEmail", "userObjectId"],
+              "properties": {
+                "operation": { "type": "string", "enum": ["listEnabledAgents"] },
+                "userEmail": { "type": "string" },
+                "userObjectId": { "type": "string" }
+              }
+            }
+          },
+          "runtimeConfiguration": { "secureData": { "properties": ["inputs", "outputs"] } }
+        }
+      },
+      "actions": {
+        "Initialize_management": {
+          "type": "InitializeVariable",
+          "inputs": { "variables": [{ "name": "canManageCatalog", "type": "boolean", "value": false }] },
+          "runAfter": {}
+        },
+        "Read_catalog": {
+          "type": "OpenApiConnection",
+          "inputs": {
+            "host": {
+              "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+              "connectionName": "shared_sharepointonline",
+              "operationId": "GetItems"
+            },
+            "parameters": { "dataset": "__SITE_URL__", "table": "__LIST_ID__" },
+            "authentication": "@parameters('$authentication')"
+          },
+          "runtimeConfiguration": {
+            "paginationPolicy": { "minimumItemCount": 5000 },
+            "secureData": { "properties": ["inputs", "outputs"] }
+          },
+          "runAfter": { "Initialize_management": ["Succeeded"] }
+        },
+        "Check_management": {
+          "type": "Scope",
+          "runAfter": { "Read_catalog": ["Succeeded"] },
+          "actions": {
+            "Read_site_user": {
+              "type": "OpenApiConnection",
+              "inputs": {
+                "host": {
+                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+                  "connectionName": "shared_sharepointonline",
+                  "operationId": "HttpRequest"
+                },
+                "parameters": {
+                  "dataset": "__SITE_URL__",
+                  "parameters/method": "GET",
+                  "parameters/uri": "@concat('_api/web/siteusers/getbyemail(',decodeUriComponent('%27'),replace(triggerBody()?['userEmail'],decodeUriComponent('%27'),concat(decodeUriComponent('%27'),decodeUriComponent('%27'))),decodeUriComponent('%27'),')?$select=IsSiteAdmin')",
+                  "parameters/headers": { "Accept": "application/json;odata=nometadata" }
+                },
+                "authentication": "@parameters('$authentication')"
+              },
+              "runtimeConfiguration": { "secureData": { "properties": ["inputs", "outputs"] } },
+              "runAfter": {}
+            },
+            "Read_list_permissions": {
+              "type": "OpenApiConnection",
+              "inputs": {
+                "host": {
+                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+                  "connectionName": "shared_sharepointonline",
+                  "operationId": "HttpRequest"
+                },
+                "parameters": {
+                  "dataset": "__SITE_URL__",
+                  "parameters/method": "GET",
+                  "parameters/uri": "@concat('_api/web/lists(guid',decodeUriComponent('%27'),'__LIST_ID__',decodeUriComponent('%27'),')/getusereffectivepermissions(@u)?@u=',decodeUriComponent('%27'),'i:0%23.f|membership|',replace(triggerBody()?['userEmail'],decodeUriComponent('%27'),concat(decodeUriComponent('%27'),decodeUriComponent('%27'))),decodeUriComponent('%27'))",
+                  "parameters/headers": { "Accept": "application/json;odata=nometadata" }
+                },
+                "authentication": "@parameters('$authentication')"
+              },
+              "runtimeConfiguration": { "secureData": { "properties": ["inputs", "outputs"] } },
+              "runAfter": { "Read_site_user": ["Succeeded"] }
+            },
+            "Set_management": {
+              "type": "SetVariable",
+              "inputs": {
+                "name": "canManageCatalog",
+                "value": "@or(equals(coalesce(body('Read_site_user')?['IsSiteAdmin'],body('Read_site_user')?['d']?['IsSiteAdmin'],false),true),equals(mod(div(int(coalesce(body('Read_list_permissions')?['Low'],body('Read_list_permissions')?['GetUserEffectivePermissions']?['Low'],body('Read_list_permissions')?['d']?['Low'],body('Read_list_permissions')?['d']?['GetUserEffectivePermissions']?['Low'],'0')),2048),2),1))"
+              },
+              "runAfter": { "Read_list_permissions": ["Succeeded"] }
+            }
+          }
+        },
+        "Select_catalog": {
+          "type": "Select",
+          "inputs": {
+            "from": "@body('Read_catalog')?['value']",
+            "select": {
+              "Id": "@string(item()?['ID'])",
+              "Title": "@item()?['Title']",
+              "Description": "@item()?['__FIELD_DESCRIPTION__']",
+              "EnvironmentId": "@item()?['__FIELD_ENVIRONMENTID__']",
+              "SchemaName": "@item()?['__FIELD_SCHEMANAME__']",
+              "Enabled": "@item()?['__FIELD_ENABLED__']",
+              "CompletionPhrase": "@item()?['__FIELD_COMPLETIONPHRASE__']",
+              "EndsConversation": "@item()?['__FIELD_ENDSCONVERSATION__']",
+              "WelcomeMessage": "@item()?['__FIELD_WELCOMEMESSAGE__']",
+              "Locale": "@item()?['Locale']",
+              "VoiceName": "@item()?['VoiceName']",
+              "AvatarCharacter": "@item()?['AvatarCharacter']",
+              "AvatarStyle": "@item()?['AvatarStyle']",
+              "Audience": "@item()?['Audience']?['Value']",
+              "AllowedUsers": "@item()?['AllowedUsers']",
+              "Harness": "@item()?['Harness']"
+            }
+          },
+          "runtimeConfiguration": { "secureData": { "properties": ["inputs", "outputs"] } },
+          "runAfter": { "Check_management": ["Succeeded", "Failed", "TimedOut", "Skipped"] }
+        },
+        "Respond": {
+          "type": "Response",
+          "kind": "Http",
+          "inputs": {
+            "statusCode": 200,
+            "headers": { "Content-Type": "application/json", "Cache-Control": "no-store" },
+            "body": {
+              "agents": "@body('Select_catalog')",
+              "canManageCatalog": "@variables('canManageCatalog')",
+              "configurationUrl": "@if(variables('canManageCatalog'),'__CATALOG_URL__',null)"
+            }
+          },
+          "runtimeConfiguration": { "secureData": { "properties": ["inputs"] } },
+          "runAfter": { "Select_catalog": ["Succeeded"] }
+        }
+      },
+      "outputs": {}
+    }
+  }
+}

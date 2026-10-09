@@ -2,8 +2,11 @@ import * as SpeechSDK from "microsoft-cognitiveservices-speech-sdk";
 
 import type { AgentDefinition, SpeechCredentials } from "./types";
 
-async function getCredentials(): Promise<SpeechCredentials> {
-  const response = await fetch("/api/speech/token", { method: "POST" });
+async function getCredentials(accessToken: string): Promise<SpeechCredentials> {
+  const response = await fetch("/api/speech/token", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
   if (!response.ok) {
     const body = (await response.json().catch(() => undefined)) as { error?: string } | undefined;
     throw new Error(body?.error || "Unable to obtain Speech credentials.");
@@ -37,6 +40,7 @@ export class SpeechController {
   constructor(
     private agent: AgentDefinition,
     private readonly video: HTMLVideoElement,
+    private readonly getApiAccessToken: () => Promise<string>,
   ) {
     this.recognitionLanguage = agent.locale;
   }
@@ -64,7 +68,7 @@ export class SpeechController {
   ): Promise<void> {
     await this.stopSpeaking();
     await this.stopListening();
-    const credentials = await getCredentials();
+    const credentials = await getCredentials(await this.getApiAccessToken());
     const speechConfig = createSpeechConfig(
       credentials,
       this.agent,
@@ -115,7 +119,7 @@ export class SpeechController {
       return;
     }
     await this.stopSpeaking();
-    const credentials = await getCredentials();
+    const credentials = await getCredentials(await this.getApiAccessToken());
     const speechConfig = createSpeechConfig(
       credentials,
       this.agent,

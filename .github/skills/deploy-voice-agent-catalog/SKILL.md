@@ -243,6 +243,7 @@ are:
 - `SchemaName`
 - `Enabled`
 - `CompletionPhrase`
+- `EndsConversation`
 - `WelcomeMessage`
 - `Locale`
 - `VoiceName`
@@ -263,11 +264,22 @@ flow maker read access and catalog maintainers edit access.
 
 Read the row back and verify all required fields before continuing.
 
+For URL-first maker onboarding, add `AgentUrl` and `RegistrationStatus`,
+configure a maker-owned Dataverse metadata connection, and install
+`catalog/agent-registration-flow.template.json` with
+`scripts/provision-catalog-flow.ps1 -TemplatePath ... -MetadataConnectionName ...`
+using a separate ignored state file. Show only the agent URL on
+the new-item form. Set new entries disabled; validate metadata, sharing, transport
+and voice before an administrator enables them. Do not guess a schema name from
+an agent GUID. Resolve only the explicitly configured environment.
+
 Create the maker-owned flow exactly as documented in
 `catalog/power-automate-flow.md`. Save it, copy the signed trigger URL, and test
-that it returns a user-filtered `agents` array. The app passes a best-effort
-email for dropdown UX, but Copilot Studio sharing is the final security
-boundary. Have the flow return `canManageCatalog` and `configurationUrl` only
+that its authenticated backend response contains a user-filtered `agents` array.
+The backend validates the app API token and derives the caller from signed
+claims; it validates audience policy and removes people-picker data. Copilot
+Studio sharing remains the final invocation boundary. Have the flow return
+`canManageCatalog` and `configurationUrl` only
 for catalog/site administrators; never expose the list URL through a public app
 environment variable. Treat the signed trigger URL as a secret.
 
@@ -299,13 +311,14 @@ DEMO_MODE=false
 ```
 
 Use `CATALOG_FLOW_URL=disabled` only for a staged deployment before the flow
-exists. The configured default agent remains available, but `/api/catalog`
-stays disabled until the signed URL is supplied and provisioning is rerun.
+exists. Production connection fails closed until the signed URL is supplied
+and provisioning is rerun. Do not use a fallback to bypass catalog governance.
 
 For a time-critical POC when delegated consent is blocked, set
 `DEMO_MODE=true`. This runs the local four-question Pat demonstration and the
 deterministic Morgan order tool with Speech/avatar but intentionally bypasses
-Copilot Studio. In Teams, Pat uses the current user's login hint to open a
+Copilot Studio; Speech still requires an authenticated app API token. In Teams,
+Pat uses the current user's login hint to open a
 self-addressed Outlook draft; the user must select **Send**. The UI and final
 summary must clearly identify those limitations. Set demo mode back to `false`
 before verifying real agent invocation, SharePoint persistence, or automatic
@@ -319,7 +332,9 @@ first provision. Confirm the environment file is ignored by Git.
 Run:
 
 ```powershell
-npm install
+npm ci
+npm test
+npm run typecheck
 npm run build
 az bicep build --file infra/azure.bicep
 ```
@@ -376,10 +391,16 @@ Verify the public `/api/health` endpoint and root redirect before continuing.
 
 Verify the Entra SPA has:
 
+- the app-owned `api://<client-id>/access_as_user` delegated scope;
 - Power Platform `CopilotStudio.Copilots.Invoke`;
 - `brk-multihub://<deployed-domain>` as a SPA redirect for Teams NAA;
 - the deployed `/auth/callback` SPA redirect URI; and
 - single-tenant sign-in.
+
+Before applying `aad.manifest.json`, verify the invocation permission's ID by
+resolving the enabled `CopilotStudio.Copilots.Invoke` scope on the Power Platform
+API service principal by name. If the manifest's ID is stale, update that one
+scope; do not add maker/admin permissions or change tenant-wide consent policy.
 
 The Teams client must initialize Teams JS before MSAL and use nested app
 authentication. Verify silent token acquisition first. If user consent is
@@ -419,8 +440,9 @@ Verify all of these:
    If demo mode is selected, also verify `demoMode: true`.
 4. Key Vault references resolve and neither secret reaches the browser.
 5. `/api/catalog` returns the maker-owned flow's normalized `agents` array.
-   If `CATALOG_FLOW_URL=disabled`, verify it returns 404 and the default agent
-   remains available instead.
+   Anonymous/invalid-token catalog and Speech requests must return 401.
+   If `CATALOG_FLOW_URL=disabled`, verify authenticated access reports the
+   unavailable catalog and does not connect to a fallback agent.
 6. Teams uses the current work identity without a separate login prompt.
 7. First-use consent, if required, returns to the app without a nested app
    window; subsequent token acquisition is silent.
@@ -451,6 +473,10 @@ Verify all of these:
 
 If any check fails, fix the root cause and repeat the smallest relevant
 provision, deploy, or verification step.
+
+Use `docs/release-validation.md` as the release gate. Do not submit the package
+before browser and Teams published-agent tests pass. Do not claim that a maker
+test panel proves deployed authentication, voice or email delivery.
 
 ## Phase 10: Handoff
 

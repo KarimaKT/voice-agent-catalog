@@ -9,8 +9,10 @@ every user for Microsoft Graph `Sites.Read.All`.
 - The HTTP trigger URL is a signed secret.
 - Store that URL only in ignored `env/.env.dev.user` and Azure Key Vault.
 - App Service calls the flow; the browser never receives the URL.
-- The app sends a best-effort email hint for dropdown filtering. It is
-  user-controlled metadata, not proof of identity.
+- The app validates its delegated bearer token, then sends the normalized email
+  and object ID derived from verified claims.
+- App Service repeats the Restricted-row policy check and removes
+  `AllowedUsers` before responding to the browser.
 - Copilot Studio sharing and runtime authorization remain the final security
   boundary. Do not put secrets in the catalog.
 
@@ -32,6 +34,9 @@ Confirm licensing and data-loss-prevention policy with the customer.
        },
        "userEmail": {
          "type": "string"
+       },
+       "userObjectId": {
+         "type": "string"
        }
      }
    }
@@ -39,14 +44,12 @@ Confirm licensing and data-loss-prevention policy with the customer.
 
 4. Add **SharePoint – Get items**.
 5. Select the customer site and `Voice Agent Catalog` list.
-6. Filter enabled rows for the dropdown:
-   - include `Audience=Everyone`;
-   - include `Audience=Restricted` only when one of the direct
-     `AllowedUsers` email values matches `userEmail`, case-insensitively;
-   - do not use the email hint as authorization.
-7. Determine catalog management UX using trusted SharePoint/flow context:
-   set `canManageCatalog` for configured catalog administrators or site
-   administrators and set `configurationUrl` to the approved list/page URL
+6. Return catalog records only to the authenticated backend. The backend
+   validates and filters `Enabled` and `Audience` and strips `AllowedUsers`
+   before returning the public catalog. Do not expose the signed URL.
+7. Determine catalog management UX using SharePoint site-user and list-effective
+   permissions for the verified caller. Site administrators and users with
+   `ManageLists` can manage the catalog. Set `configurationUrl` to the list/page URL
    only for those users. Return `false` and omit the URL for everyone else.
 8. Add **Data Operation – Select**.
 9. Set **From** to the filtered `value` output from **Get items**.
@@ -61,12 +64,13 @@ Confirm licensing and data-loss-prevention policy with the customer.
    | `SchemaName` | `SchemaName` |
    | `Enabled` | `Enabled` |
    | `CompletionPhrase` | `CompletionPhrase` |
+   | `EndsConversation` | `EndsConversation` |
    | `WelcomeMessage` | `WelcomeMessage` |
    | `Locale` | `Locale` |
    | `VoiceName` | `VoiceName` |
    | `AvatarCharacter` | `AvatarCharacter` |
    | `AvatarStyle` | `AvatarStyle` |
-   | `Audience` | `Audience` |
+   | `Audience` | `Audience Value` from the Choice column |
    | `AllowedUsers` | `AllowedUsers` people-picker array (email/display name) |
    | `Harness` | `Harness` |
 
@@ -108,8 +112,21 @@ CATALOG_FLOW_URL=<signed-trigger-url>
 Provision again. Bicep stores the URL in Key Vault as `catalog-flow-url` and
 configures App Service with a Key Vault reference.
 
-Before the flow is created, keep `CATALOG_FLOW_URL=disabled`. The default agent
-continues to work while the shared catalog endpoint remains off.
+Before the flow is created, keep `CATALOG_FLOW_URL=disabled`. Production
+connection remains unavailable; it does not bypass catalog policy with a default.
+
+## Repeatable provisioning
+
+[The template](catalog-flow.template.json) and
+[PowerShell script](../scripts/provision-catalog-flow.ps1) reproduce the bridge.
+Supply environment/site/list/connection identifiers and an ignored JSON field
+map associating display names with actual internal names. The script saves
+the flow ID and signed callback only inside a Git-ignored state file and updates
+the same flow on reruns. It does not create or authorize connections.
+
+`Audience` is a SharePoint Choice value (`Value`), not the full connector object.
+Secure run-history inputs/outputs remain enabled. A failed permissions lookup
+leaves `canManageCatalog=false`; it never grants the link by guessing.
 
 ## Test
 

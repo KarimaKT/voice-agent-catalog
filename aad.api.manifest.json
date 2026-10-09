@@ -1,0 +1,31 @@
+{
+  "id": "${{AAD_APP_OBJECT_ID}}",
+  "appId": "${{AAD_APP_CLIENT_ID}}",
+  "displayName": "Voice Agent Catalog",
+  "signInAudience": "AzureADMyOrg",
+  "identifierUris": [
+    "api://${{AAD_APP_CLIENT_ID}}"
+  ],
+  "api": {
+    "requestedAccessTokenVersion": 2,
+    "oauth2PermissionScopes": [
+      {
+        "adminConsentDescription": "Allow the application to access the Voice Agent Catalog API on behalf of the signed-in user.",
+        "adminConsentDisplayName": "Access Voice Agent Catalog as the signed-in user",
+        "id": "9e6f1e25-6b7d-4d4f-8f26-6eb44f4f7861",
+        "isEnabled": true,
+        "type": "User",
+        "userConsentDescription": "Allow this application to access the Voice Agent Catalog API on your behalf.",
+        "userConsentDisplayName": "Access Voice Agent Catalog",
+        "value": "access_as_user"
+      }
+    ],
+    "preAuthorizedApplications": []
+  },
+  "info": {},
+  "publicClient": {},
+  "web": {
+    "implicitGrantSettings": {}
+  },
+  "spa": {}
+}

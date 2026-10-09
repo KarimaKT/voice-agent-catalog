@@ -5,25 +5,21 @@ export interface AgentDefinition {
   environmentId: string;
   schemaName: string;
   completionPhrase: string;
+  endsConversation: boolean;
   welcomeMessage: string;
   locale: string;
   voiceName: string;
   avatarCharacter: string;
   avatarStyle: string;
   audience?: "Everyone" | "Restricted";
-  allowedUsers?: CatalogUser[];
   harness?: string;
   demoKind?: "interview" | "orders";
-}
-
-export interface CatalogUser {
-  email: string;
-  displayName?: string;
 }
 
 export interface AppConfig {
   tenantId: string;
   clientId: string;
+  apiScope: string;
   defaultAgent: AgentDefinition;
   catalogEnabled: boolean;
   demoMode: boolean;
@@ -57,8 +53,10 @@ export interface ChatMessage {
 
 export interface AgentAction {
   title: string;
-  value?: string;
+  kind?: "message" | "submit";
+  value?: unknown;
   url?: string;
+  unsupported?: string;
 }
 
 export interface AgentCitation {
@@ -66,8 +64,6 @@ export interface AgentCitation {
   abstract?: string;
   url?: string;
 }
-
-export type AdaptiveCardElement = Record<string, unknown>;
 
 export type AgentAttachment =
   | {
@@ -85,8 +81,12 @@ export type AgentAttachment =
   | {
       kind: "adaptiveCard";
       name?: string;
-      body: AdaptiveCardElement[];
-      actions: AdaptiveCardElement[];
+      content: Record<string, unknown>;
+    }
+  | {
+      kind: "unsupported";
+      name?: string;
+      reason: string;
     };
 
 export type TurnState =

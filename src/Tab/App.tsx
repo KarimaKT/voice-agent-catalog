@@ -12,8 +12,10 @@ import {
   type TeamsIdentityContext,
 } from "./copilot";
 import { SpeechController } from "./speech";
+import { completesConversation, getHarnessSupport } from "./agent-behavior";
+import { AdaptiveCard } from "./AdaptiveCard";
+import { safeHttpUrl } from "./adaptive-card-policy";
 import type {
-  AdaptiveCardElement,
   AgentAction,
   AgentAttachment,
   AgentDefinition,
@@ -49,106 +51,14 @@ function createMessage(
   };
 }
 
-function safeHttpUrl(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function cardText(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-function AdaptiveCardContent({
-  elements,
-  onAction,
-}: {
-  elements: AdaptiveCardElement[];
-  onAction: (action: AgentAction) => void;
-}) {
-  return (
-    <>
-      {elements.map((element, index) => {
-        const type = cardText(element.type);
-        const key = `${type || "element"}-${index}`;
-        if (type === "TextBlock") {
-          return <p className="adaptive-text" key={key}>{cardText(element.text)}</p>;
-        }
-        if (type === "Image") {
-          const url = safeHttpUrl(element.url);
-          return url ? (
-            <img
-              className="adaptive-image"
-              key={key}
-              src={url}
-              alt={cardText(element.altText) || "Adaptive Card image"}
-              loading="lazy"
-            />
-          ) : null;
-        }
-        if (type === "FactSet" && Array.isArray(element.facts)) {
-          return (
-            <dl className="adaptive-facts" key={key}>
-              {element.facts.map((fact, factIndex) => {
-                const item = fact && typeof fact === "object"
-                  ? fact as Record<string, unknown>
-                  : {};
-                return (
-                  <React.Fragment key={`${key}-${factIndex}`}>
-                    <dt>{cardText(item.title)}</dt>
-                    <dd>{cardText(item.value)}</dd>
-                  </React.Fragment>
-                );
-              })}
-            </dl>
-          );
-        }
-        if (
-          (type === "Container" || type === "Column") &&
-          Array.isArray(element.items)
-        ) {
-          return (
-            <div className="adaptive-container" key={key}>
-              <AdaptiveCardContent elements={element.items as AdaptiveCardElement[]} onAction={onAction} />
-            </div>
-          );
-        }
-        if (type === "ColumnSet" && Array.isArray(element.columns)) {
-          return (
-            <div className="adaptive-columns" key={key}>
-              {element.columns.map((column, columnIndex) => {
-                const item = column && typeof column === "object"
-                  ? column as AdaptiveCardElement
-                  : {};
-                return (
-                  <AdaptiveCardContent
-                    key={`${key}-${columnIndex}`}
-                    elements={[item]}
-                    onAction={onAction}
-                  />
-                );
-              })}
-            </div>
-          );
-        }
-        return null;
-      })}
-    </>
-  );
-}
-
 function RichMessageContent({
   message,
   onAction,
+  actionsDisabled,
 }: {
   message: ChatMessage;
   onAction: (action: AgentAction) => void;
+  actionsDisabled: boolean;
 }) {
   return (
     <>
@@ -158,6 +68,7 @@ function RichMessageContent({
           attachment={attachment}
           key={`${attachment.kind}-${index}`}
           onAction={onAction}
+          actionsDisabled={actionsDisabled}
         />
       ))}
       {message.citations?.length ? (
@@ -166,8 +77,8 @@ function RichMessageContent({
           <ol>
             {message.citations.map((citation, index) => (
               <li key={`${citation.name}-${index}`}>
-                {citation.url ? (
-                  <a href={citation.url} target="_blank" rel="noreferrer">
+                {safeHttpUrl(citation.url) ? (
+                  <a href={safeHttpUrl(citation.url)} target="_blank" rel="noopener noreferrer">
                     {citation.name}
                   </a>
                 ) : citation.name}
@@ -180,13 +91,20 @@ function RichMessageContent({
       {message.suggestedActions?.length ? (
         <div className="message-actions">
           {message.suggestedActions.map((action, index) => (
-            <button
-              className="action-button"
-              key={`${action.title}-${index}`}
-              onClick={() => onAction(action)}
-            >
-              {action.title}
-            </button>
+            action.unsupported ? (
+              <p className="card-fallback" role="note" key={`${action.title}-${index}`}>
+                {action.title}: {action.unsupported}
+              </p>
+            ) : (
+              <button
+                className="action-button"
+                key={`${action.title}-${index}`}
+                disabled={!action.url && actionsDisabled}
+                onClick={() => onAction(action)}
+              >
+                {action.title}
+              </button>
+            )
           ))}
         </div>
       ) : null}
@@ -197,61 +115,41 @@ function RichMessageContent({
 function AttachmentContent({
   attachment,
   onAction,
+  actionsDisabled,
 }: {
   attachment: AgentAttachment;
   onAction: (action: AgentAction) => void;
+  actionsDisabled: boolean;
 }) {
+  if (attachment.kind === "unsupported") {
+    return <p className="card-fallback" role="note">{attachment.name}: {attachment.reason}</p>;
+  }
   if (attachment.kind === "image") {
+    const url = safeHttpUrl(attachment.url);
+    if (!url) return <p role="note">This image link was blocked.</p>;
     return (
       <figure className="message-image">
-        <img src={attachment.url} alt={attachment.alt || attachment.name || "Agent-generated image"} loading="lazy" />
+        <img src={url} alt={attachment.alt || attachment.name || "Agent-generated image"} loading="lazy" />
         {attachment.name && <figcaption>{attachment.name}</figcaption>}
       </figure>
     );
   }
   if (attachment.kind === "file") {
+    const url = safeHttpUrl(attachment.url);
+    if (!url) return <p role="note">This attachment link was blocked.</p>;
     return (
-      <a className="file-link" href={attachment.url} target="_blank" rel="noreferrer">
+      <a className="file-link" href={url} target="_blank" rel="noopener noreferrer">
         {attachment.name}
       </a>
     );
   }
   return (
-    <section className="adaptive-card" aria-label={attachment.name || "Adaptive Card"}>
-      <AdaptiveCardContent elements={attachment.body} onAction={onAction} />
-      <div className="message-actions">
-        {attachment.actions.flatMap((rawAction, index) => {
-          const type = cardText(rawAction.type);
-          const title = cardText(rawAction.title);
-          if (!title) {
-            return [];
-          }
-          if (type === "Action.OpenUrl") {
-            const url = safeHttpUrl(rawAction.url);
-            return url ? [
-              <a className="action-button" href={url} target="_blank" rel="noreferrer" key={`${title}-${index}`}>
-                {title}
-              </a>,
-            ] : [];
-          }
-          if (type === "Action.Submit") {
-            const data = rawAction.data;
-            const value = typeof data === "string"
-              ? data
-              : data && typeof data === "object"
-                ? cardText((data as Record<string, unknown>).text) ||
-                  cardText((data as Record<string, unknown>).value)
-                : "";
-            return value ? [
-              <button className="action-button" onClick={() => onAction({ title, value })} key={`${title}-${index}`}>
-                {title}
-              </button>,
-            ] : [];
-          }
-          return [];
-        })}
-      </div>
-    </section>
+    <AdaptiveCard
+      content={attachment.content}
+      name={attachment.name}
+      disabled={actionsDisabled}
+      onAction={onAction}
+    />
   );
 }
 
@@ -274,6 +172,7 @@ export default function App() {
   const [voiceConversationActive, setVoiceConversationActive] = React.useState(false);
   const [hostName, setHostName] = React.useState("browser");
   const [agents, setAgents] = React.useState<AgentDefinition[]>([]);
+  const [catalogLoaded, setCatalogLoaded] = React.useState(false);
   const [selectedAgentId, setSelectedAgentId] = React.useState("");
   const [emailDraftUrl, setEmailDraftUrl] = React.useState("");
   const [inputLanguage, setInputLanguage] = React.useState("en-US");
@@ -288,6 +187,8 @@ export default function App() {
   const transcriptRef = React.useRef<HTMLDivElement>(null);
   const voiceConversationActiveRef = React.useRef(false);
   const autoSubmitTimerRef = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const turnInFlightRef = React.useRef(false);
+  const catalogLoadInFlightRef = React.useRef(false);
 
   React.useEffect(() => {
     let disposed = false;
@@ -309,7 +210,6 @@ export default function App() {
         identityContext = {
           isTeamsHosted: true,
           supportsNestedAuth,
-          homeAccountId: context.user?.id,
           loginHint: context.user?.loginHint,
           tenantId: context.user?.tenant?.id,
         };
@@ -327,17 +227,24 @@ export default function App() {
         }
         configRef.current = config;
         demoEmailRecipientRef.current = identityContext.loginHint;
-        identityRef.current = new MicrosoftIdentity(config, identityContext);
-        speechRef.current = new SpeechController(config.defaultAgent, videoRef.current);
-        setInputLanguage(config.defaultAgent.locale);
-        setAgents(
-          config.demoMode && config.demoAgents?.length
-            ? config.demoAgents
-            : [config.defaultAgent],
+        const identity = new MicrosoftIdentity(config, identityContext);
+        identityRef.current = identity;
+        speechRef.current = new SpeechController(
+          config.defaultAgent,
+          videoRef.current,
+          () => identity.acquireApiToken(),
         );
-        setSelectedAgentId(config.defaultAgent.id);
+        setInputLanguage(config.defaultAgent.locale);
+        const initialAgents = config.demoMode ? config.demoAgents || [] : [];
+        setAgents(initialAgents);
+        setCatalogLoaded(initialAgents.length > 0);
+        setSelectedAgentId(
+          (initialAgents.find((agent) => agent.id === config.defaultAgent.id &&
+            getHarnessSupport(agent.harness).supported) ||
+            initialAgents.find((agent) => getHarnessSupport(agent.harness).supported))?.id || "",
+        );
         setState("ready");
-        setStatus("Ready to connect");
+        setStatus(initialAgents.length ? "Choose an agent to connect" : "Sign in to load your authorized catalog");
       } catch (error) {
         setState("error");
         setStatus(error instanceof Error ? error.message : "Initialization failed.");
@@ -361,118 +268,129 @@ export default function App() {
     });
   }, [messages, interim]);
 
-  async function connect(): Promise<void> {
+  async function loadCatalog(): Promise<void> {
     const config = configRef.current;
     const identity = identityRef.current;
-    if (!config || !identity) {
+    if (!config || !identity || catalogLoadInFlightRef.current) {
       return;
     }
+    catalogLoadInFlightRef.current = true;
     setState("connecting");
+    setStatus("Signing in and loading your authorized catalog...");
     setCanManageCatalog(false);
     setConfigurationUrl("");
-    const selectedName =
-      agents.find((agent) => agent.id === selectedAgentId)?.displayName ||
-      config.defaultAgent.displayName;
-    setStatus(`Connecting to ${selectedName}...`);
     try {
-      let availableAgents: AgentDefinition[];
-      let catalogNotice: string | undefined;
-      if (config.demoMode && config.demoAgents?.length) {
-        availableAgents = config.demoAgents;
-      } else {
-        try {
-          let userEmail = identity.getBestEffortUserEmail();
-          if (config.catalogEnabled && !userEmail) {
-            userEmail = await identity.ensureUserIdentity(config.defaultAgent);
-          }
-          const catalog = await loadAgentCatalog(config, userEmail);
-          availableAgents = catalog.agents;
-          setCanManageCatalog(catalog.canManageCatalog);
-          setConfigurationUrl(catalog.configurationUrl || "");
-        } catch (error) {
-          if (error instanceof CatalogAccessError) {
-            throw error;
-          }
-          availableAgents = [config.defaultAgent];
-          catalogNotice =
-            error instanceof Error
-              ? `The shared agent catalog is unavailable (${error.message}) Using the configured default agent.`
-              : "The shared agent catalog is unavailable. Using the configured default agent.";
-        }
+      const catalog = await loadAgentCatalog(config, await identity.acquireApiToken());
+      setAgents(catalog.agents);
+      setCanManageCatalog(catalog.canManageCatalog);
+      setConfigurationUrl(catalog.configurationUrl || "");
+      const selected = catalog.agents.find((agent) => getHarnessSupport(agent.harness).supported);
+      setSelectedAgentId(selected?.id || "");
+      if (selected) setInputLanguage(selected.locale);
+      setCatalogLoaded(true);
+      setState("ready");
+      setStatus(selected
+        ? "Catalog loaded. Choose an agent, then connect or start voice."
+        : "Catalog loaded. No agents use the supported Standard harness transport.");
+    } catch (error) {
+      setCatalogLoaded(false);
+      handleError(error instanceof CatalogAccessError
+        ? error
+        : new Error(error instanceof Error
+          ? `The shared agent catalog is unavailable: ${error.message}`
+          : "The shared agent catalog is unavailable."), "Could not load your authorized catalog.");
+    } finally {
+      catalogLoadInFlightRef.current = false;
+    }
+  }
+
+  async function connect(): Promise<void> {
+    if (!catalogLoaded) {
+      await loadCatalog();
+      return;
+    }
+    const config = configRef.current;
+    const identity = identityRef.current;
+    if (!config || !identity) return;
+    const selected = agents.find((agent) => agent.id === selectedAgentId);
+    setState("connecting");
+    setStatus(`Connecting to ${selected?.displayName || "the selected agent"}...`);
+    try {
+      if (!selected || !getHarnessSupport(selected.harness).supported) {
+        throw new Error("Choose an authorized agent with the supported Standard harness transport.");
       }
-      setAgents(availableAgents);
-      const selected =
-        availableAgents.find((agent) => agent.id === selectedAgentId) ||
-        availableAgents.find(
-          (agent) =>
-            agent.environmentId === config.defaultAgent.environmentId &&
-            agent.schemaName === config.defaultAgent.schemaName,
-        ) ||
-        availableAgents[0];
       setSelectedAgentId(selected.id);
       await speechRef.current?.setAgent(selected);
-      setInputLanguage(selected.locale);
-      speechRef.current?.setInputLanguage(selected.locale);
+      speechRef.current?.setInputLanguage(inputLanguage);
       setAvatarVisible(false);
       agentClientRef.current = config.demoMode
         ? new DemoAgentClient(selected, demoEmailRecipientRef.current)
         : new CopilotAgentClient(identity, selected);
       const turn = await agentClientRef.current.connect();
+      const completed = turn.completed === true ||
+        turn.messages.some((message) => completesConversation(selected, message.text));
       const welcome =
         turn.messages.length > 0
           ? turn.messages
-          : [{ text: selected.welcomeMessage }];
-      setMessages([
-        ...(catalogNotice ? [createMessage("system", catalogNotice)] : []),
-        ...welcome.map((message) => createMessage("agent", message)),
-      ]);
-      setState("ready");
-      setStatus(`${selected.displayName} is ready`);
+          : [{ text: completed ? "Conversation complete." : selected.welcomeMessage }];
+      setMessages(welcome.map((message) => createMessage("agent", message)));
+      if (completed) setVoiceConversation(false);
+      setState(completed ? "complete" : "ready");
+      setStatus(completed ? "Conversation complete" : `${selected.displayName} is ready`);
       await speakMessages(
         welcome
           .map((message) => message.speak || toSpokenText(message.text))
           .filter(Boolean),
+        completed,
       );
     } catch (error) {
-      handleError(error, `Could not connect to ${selectedName}.`);
+      agentClientRef.current = undefined;
+      handleError(error, `Could not connect to ${selected?.displayName || "the selected agent"}.`);
     }
   }
 
-  async function sendMessage(textOverride?: string): Promise<void> {
-    const text = (textOverride ?? draft).trim();
-    if (!text || !agentClientRef.current || state === "thinking") {
+  async function sendMessage(inputOverride?: string | AgentAction): Promise<void> {
+    const input = inputOverride ?? draft;
+    const text = typeof input === "string" ? input.trim() : input.title;
+    if (!text || !agentClientRef.current || turnInFlightRef.current ||
+        state === "complete" || state === "connecting" || state === "speaking") {
       return;
     }
-
-    await speechRef.current?.stopListening().catch(() => undefined);
-    setInterim("");
-    setDraft("");
-    setMessages((current) => [...current, createMessage("user", text)]);
-    setState("thinking");
-    setStatus(`${selectedAgent?.displayName || "The agent"} is thinking...`);
-
+    turnInFlightRef.current = true;
+    if (autoSubmitTimerRef.current) {
+      clearTimeout(autoSubmitTimerRef.current);
+      autoSubmitTimerRef.current = undefined;
+    }
     try {
-      const turn = await agentClientRef.current.send(text);
-      if (turn.messages.length === 0) {
+      await speechRef.current?.stopListening().catch(() => undefined);
+      setInterim("");
+      setDraft("");
+      setMessages((current) => [...current, createMessage("user", text)]);
+      setState("thinking");
+      setStatus(`${selectedAgent?.displayName || "The agent"} is thinking...`);
+      const turn = await agentClientRef.current.send(typeof input === "string" ? text : input);
+      if (turn.messages.length === 0 && !turn.completed) {
         throw new Error(`${selectedAgent?.displayName || "The agent"} returned no message.`);
       }
 
       const nextMessages: ChatMessage[] = [];
       const spoken: string[] = [];
-      let completed = false;
-      const completionPhrase =
-        agents.find((agent) => agent.id === selectedAgentId)?.completionPhrase ||
-        configRef.current?.defaultAgent.completionPhrase ||
-        "";
+      let completed = turn.completed === true;
+      const completionAgent =
+        agents.find((agent) => agent.id === selectedAgentId) ||
+        configRef.current?.defaultAgent;
 
       for (const reply of turn.messages) {
-        completed ||= reply.text
-          .toLocaleLowerCase()
-          .includes(completionPhrase.toLocaleLowerCase());
+        completed ||= Boolean(
+          completionAgent && completesConversation(completionAgent, reply.text),
+        );
         nextMessages.push(createMessage("agent", reply));
         const speech = reply.speak || toSpokenText(reply.text);
         if (speech) {
           spoken.push(speech);
+        }
+        if (completed && nextMessages.length === 0) {
+          nextMessages.push(createMessage("system", "Conversation complete."));
         }
       }
 
@@ -494,6 +412,8 @@ export default function App() {
       }
     } catch (error) {
       handleError(error, `${selectedAgent?.displayName || "The agent"} could not complete that turn.`);
+    } finally {
+      turnInFlightRef.current = false;
     }
   }
 
@@ -561,7 +481,15 @@ export default function App() {
   }
 
   async function startVoiceConversation(): Promise<void> {
+    if (!catalogLoaded) {
+      await loadCatalog();
+      return;
+    }
     setVoiceConversation(true);
+    if (!agentClientRef.current) {
+      await connect();
+      return;
+    }
     await startListening(true);
   }
 
@@ -576,7 +504,13 @@ export default function App() {
   }
 
   async function speakMessages(texts: string[], preserveCompletion = false): Promise<void> {
-    if (!speechRef.current || texts.length === 0) {
+    if (!speechRef.current) {
+      return;
+    }
+    if (texts.length === 0) {
+      if (voiceConversationActiveRef.current && !preserveCompletion) {
+        await startListening(true);
+      }
       return;
     }
     setState(preserveCompletion ? "complete" : "speaking");
@@ -638,17 +572,20 @@ export default function App() {
     setStatus(selected ? `Ready to connect to ${selected.displayName}` : "Ready to connect");
   }
 
-  const connected = messages.length > 0;
+  const connected = Boolean(agentClientRef.current);
   const busy = state === "connecting" || state === "thinking" || state === "speaking";
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) || agents[0];
+  const selectedHarness = getHarnessSupport(selectedAgent?.harness);
 
   function handleAgentAction(action: AgentAction): void {
+    if (action.unsupported) return;
     if (action.url) {
-      window.open(action.url, "_blank", "noopener,noreferrer");
+      const url = safeHttpUrl(action.url);
+      if (url) window.open(url, "_blank", "noopener,noreferrer");
       return;
     }
-    if (action.value) {
-      void sendMessage(action.value);
+    if (action.kind === "submit" || typeof action.value === "string") {
+      void sendMessage(action);
     }
   }
 
@@ -682,14 +619,29 @@ export default function App() {
               <select
                 value={selectedAgentId}
                 onChange={(event) => void selectAgent(event.target.value)}
-                disabled={busy || state === "listening"}
+                disabled={!catalogLoaded || busy || state === "listening"}
               >
+                {!selectedAgentId && <option value="">
+                  {catalogLoaded ? "No supported agents available" : "Load catalog to choose an agent"}
+                </option>}
                 {agents.map((agent) => (
-                  <option value={agent.id} key={agent.id}>
+                  <option
+                    value={agent.id}
+                    key={agent.id}
+                    disabled={!getHarnessSupport(agent.harness).supported}
+                  >
                     {agent.displayName}
+                    {!getHarnessSupport(agent.harness).supported
+                      ? ` — ${getHarnessSupport(agent.harness).label} transport unavailable`
+                      : ""}
                   </option>
                 ))}
               </select>
+              {selectedAgent && !selectedHarness.supported && (
+                <small className="transport-message">
+                  {selectedHarness.label} harness transport is not supported. Choose a Standard agent.
+                </small>
+              )}
             </label>
             <label className="agent-picker">
               <span>Spoken input</span>
@@ -716,6 +668,11 @@ export default function App() {
             )}
           </div>
 
+          <p className="voice-interface-note">
+            AI responses are requested in the configured output language with concise,
+            voice-friendly wording. Agent-authored cards and controls may affect the
+            experience. Attachments are displayed in chat, not read aloud.
+          </p>
           <div className="transcript" ref={transcriptRef} aria-live="polite">
             {!connected && (
               <div className="welcome-card">
@@ -730,9 +687,14 @@ export default function App() {
                   You can type or use your microphone, and you can turn avatar video off
                   at any time.
                 </p>
-                <button className="primary-button" onClick={() => void connect()} disabled={busy}>
-                  {configRef.current?.demoMode ? "Start demo with " : "Connect to "}
-                  {selectedAgent?.displayName || "agent"}
+                <button
+                  className="primary-button"
+                  onClick={() => void (catalogLoaded ? connect() : loadCatalog())}
+                  disabled={busy || (catalogLoaded && !selectedHarness.supported)}
+                >
+                  {!catalogLoaded
+                    ? "Sign in / Load catalog"
+                    : `${configRef.current?.demoMode ? "Start demo with" : "Connect to"} ${selectedAgent?.displayName || "agent"}`}
                 </button>
               </div>
             )}
@@ -746,7 +708,11 @@ export default function App() {
                       ? "You"
                       : "Status"}
                 </span>
-                <RichMessageContent message={message} onAction={handleAgentAction} />
+                <RichMessageContent
+                  message={message}
+                  onAction={handleAgentAction}
+                  actionsDisabled={busy || state === "complete" || !agentClientRef.current}
+                />
               </article>
             ))}
 
@@ -769,7 +735,7 @@ export default function App() {
                   ? "Type a message or use the microphone..."
                   : `Connect to ${selectedAgent?.displayName || "an agent"} first`
               }
-              disabled={!connected || busy || state === "complete"}
+              disabled={!catalogLoaded || !selectedHarness.supported || busy || state === "complete"}
               rows={3}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey) {

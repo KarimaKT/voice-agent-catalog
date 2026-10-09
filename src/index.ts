@@ -6,6 +6,8 @@ import { useAzureMonitor } from "@azure/monitor-opentelemetry";
 import { App, ExpressAdapter } from "@microsoft/teams.apps";
 import { ConsoleLogger } from "@microsoft/teams.common/logging";
 import { type NextFunction, type Request, type Response } from "express";
+import { authenticateApiRequest } from "./auth";
+import { validateAndAuthorizeCatalog } from "./catalog-policy";
 
 interface RelayTokenResponse {
   Urls?: string[];
@@ -25,7 +27,24 @@ interface CatalogFlowResponse {
 }
 
 if (process.env.APPLICATIONINSIGHTS_CONNECTION_STRING) {
-  useAzureMonitor();
+  useAzureMonitor({
+    samplingRatio: 0,
+    tracesPerSecond: 0,
+    enableLiveMetrics: false,
+    browserSdkLoaderOptions: { enabled: false },
+    instrumentationOptions: {
+      http: { enabled: false },
+      azureSdk: { enabled: false },
+      console: { enabled: false },
+      bunyan: { enabled: false },
+      winston: { enabled: false },
+      mongoDb: { enabled: false },
+      mySql: { enabled: false },
+      postgreSql: { enabled: false },
+      redis: { enabled: false },
+      redis4: { enabled: false },
+    },
+  });
 }
 
 const requiredEnvironment = [
@@ -43,21 +62,13 @@ const defaultCompletionPhrase =
 const defaultWelcomeMessage =
   "Hi, I'm Pat, an AI assistant to your manager. I'll ask four short questions and email your manager a handoff summary. What is your name and role?";
 
-function normalizeEmail(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const email = value.trim().toLocaleLowerCase();
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : undefined;
-}
-
 function safeHttpUrl(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
   try {
     const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:" ? url.toString() : undefined;
+    return url.protocol === "https:" ? url.toString() : undefined;
   } catch {
     return undefined;
   }
@@ -83,7 +94,7 @@ const adapter = secureServer
   : new ExpressAdapter();
 adapter.use((_request: Request, response: Response, next: NextFunction) => {
   response.removeHeader("X-Powered-By");
-  response.setHeader("Content-Security-Policy", "default-src 'self'; connect-src 'self' https://login.microsoftonline.com https://res.cdn.office.net https://api.powerplatform.com https://*.api.powerplatform.com https://*.environment.api.powerplatform.com https://*.cognitiveservices.azure.com https://*.speech.microsoft.com wss://*.speech.microsoft.com; frame-ancestors https://teams.microsoft.com https://*.teams.microsoft.com https://*.cloud.microsoft; img-src 'self' https: data: blob:; media-src 'self' blob:; script-src 'self'; style-src 'self' 'unsafe-inline'");
+  response.setHeader("Content-Security-Policy", "default-src 'self'; connect-src 'self' https://login.microsoftonline.com https://res.cdn.office.net https://api.powerplatform.com https://*.api.powerplatform.com https://*.environment.api.powerplatform.com https://*.cognitiveservices.azure.com https://*.speech.microsoft.com wss://*.speech.microsoft.com; frame-src 'self' https://login.microsoftonline.com; frame-ancestors 'self' https://teams.microsoft.com https://*.teams.microsoft.com https://*.cloud.microsoft; img-src 'self' https: data: blob:; media-src 'self' blob:; script-src 'self'; style-src 'self' 'unsafe-inline'");
   response.setHeader("Referrer-Policy", "no-referrer");
   response.setHeader("X-Content-Type-Options", "nosniff");
   next();
@@ -92,7 +103,7 @@ const logger = new ConsoleLogger("voice-agent-catalog", { level: "info" });
 const app = new App({
   logger,
   httpServerAdapter: adapter,
-  skipAuth: true,
+  dangerouslyAllowUnauthenticatedRequests: true,
 });
 app.event("error", ({ error }) => {
   const message = error instanceof Error ? error.message : "Application server error";
@@ -103,9 +114,14 @@ app.event("error", ({ error }) => {
 
 const speechRateLimits = new Map<string, RateLimitEntry>();
 
-function enforceSpeechRateLimit(request: Request, response: Response): boolean {
+function enforceSpeechRateLimit(userId: string, response: Response): boolean {
   const now = Date.now();
-  const key = request.ip || request.socket.remoteAddress || "unknown";
+  for (const [id, entry] of speechRateLimits) {
+    if (entry.resetAt <= now) {
+      speechRateLimits.delete(id);
+    }
+  }
+  const key = userId;
   const existing = speechRateLimits.get(key);
   const entry = !existing || existing.resetAt <= now
     ? { count: 0, resetAt: now + 60_000 }
@@ -151,6 +167,7 @@ adapter.get("/api/config", (_request: Request, response: Response) => {
         (demoMode
           ? "Thank you. Your manager handoff summary is ready."
           : defaultCompletionPhrase),
+      endsConversation: true,
       welcomeMessage:
         process.env.DEFAULT_AGENT_WELCOME_MESSAGE?.trim() ||
         defaultWelcomeMessage,
@@ -166,10 +183,12 @@ adapter.get("/api/config", (_request: Request, response: Response) => {
     const catalogFlowUrl = process.env.CATALOG_FLOW_URL?.trim();
     const catalogEnabled =
       Boolean(catalogFlowUrl) && catalogFlowUrl?.toLowerCase() !== "disabled";
+    const clientId = getEnvironment("AAD_APP_CLIENT_ID");
     response.setHeader("Cache-Control", "no-store");
     response.json({
       tenantId: getEnvironment("TENANT_ID"),
-      clientId: getEnvironment("AAD_APP_CLIENT_ID"),
+      clientId,
+      apiScope: `api://${clientId}/access_as_user`,
       defaultAgent,
       catalogEnabled,
       demoMode,
@@ -183,6 +202,7 @@ adapter.get("/api/config", (_request: Request, response: Response) => {
               description:
                 "An order management assistant that finds orders and creates new order requests.",
               completionPhrase: "Your order request has been placed.",
+              endsConversation: false,
               welcomeMessage:
                 "Hi, I'm Morgan. Ask me to show pending orders, find an order number, or place a new order.",
               voiceName: "en-US-AndrewMultilingualNeural",
@@ -200,14 +220,29 @@ adapter.get("/api/config", (_request: Request, response: Response) => {
 });
 
 adapter.get("/api/catalog", async (request: Request, response: Response) => {
+  let user;
+  try {
+    const tenantId = getEnvironment("TENANT_ID");
+    const audience =
+      process.env.API_AUDIENCE?.trim() || getEnvironment("AAD_APP_CLIENT_ID");
+    user = await authenticateApiRequest(request, tenantId, audience);
+  } catch (error) {
+    logger.warn(error instanceof Error ? error.message : "Catalog authentication failed");
+    response.status(401).json({ error: "A valid app access token is required." });
+    return;
+  }
+
   const catalogFlowUrl = process.env.CATALOG_FLOW_URL?.trim();
   if (!catalogFlowUrl || catalogFlowUrl.toLowerCase() === "disabled") {
     response.status(404).json({ error: "The shared agent catalog is not configured." });
     return;
   }
+  if (!user.email) {
+    response.status(403).json({ error: "The app token must contain a verified user email or UPN for catalog access." });
+    return;
+  }
 
   try {
-    const userEmail = normalizeEmail(request.header("X-Voice-Catalog-User"));
     const flowResponse = await fetch(catalogFlowUrl, {
       method: "POST",
       headers: {
@@ -216,7 +251,8 @@ adapter.get("/api/catalog", async (request: Request, response: Response) => {
       },
       body: JSON.stringify({
         operation: "listEnabledAgents",
-        userEmail,
+        userEmail: user.email,
+        userObjectId: user.oid,
       }),
       signal: AbortSignal.timeout(20_000),
     });
@@ -227,11 +263,12 @@ adapter.get("/api/catalog", async (request: Request, response: Response) => {
     if (!Array.isArray(payload.agents)) {
       throw new Error("Catalog flow returned an invalid response");
     }
+    const agents = validateAndAuthorizeCatalog(payload.agents, user);
 
     const canManageCatalog = payload.canManageCatalog === true;
     response.setHeader("Cache-Control", "no-store");
     response.json({
-      agents: payload.agents,
+      agents,
       canManageCatalog,
       configurationUrl: canManageCatalog
         ? safeHttpUrl(payload.configurationUrl)
@@ -245,15 +282,23 @@ adapter.get("/api/catalog", async (request: Request, response: Response) => {
 
 adapter.get("/auth/callback", (_request: Request, response: Response) => {
   response.setHeader("Cache-Control", "no-store");
-  response
-    .type("html")
-    .send(
-      '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Signing in</title></head><body><p>Completing Microsoft sign-in...</p></body></html>',
-    );
+  response.sendFile(path.join(__dirname, "client", "auth-callback.html"));
 });
 
-adapter.post("/api/speech/token", async (_request: Request, response: Response) => {
-  if (!enforceSpeechRateLimit(_request, response)) {
+adapter.post("/api/speech/token", async (request: Request, response: Response) => {
+  let user;
+  try {
+    const tenantId = getEnvironment("TENANT_ID");
+    const audience =
+      process.env.API_AUDIENCE?.trim() || getEnvironment("AAD_APP_CLIENT_ID");
+    user = await authenticateApiRequest(request, tenantId, audience);
+  } catch (error) {
+    logger.warn(error instanceof Error ? error.message : "Speech authentication failed");
+    response.status(401).json({ error: "A valid app access token is required." });
+    return;
+  }
+
+  if (!enforceSpeechRateLimit(user.oid, response)) {
     return;
   }
 
@@ -268,9 +313,11 @@ adapter.post("/api/speech/token", async (_request: Request, response: Response) 
       fetch(tokenUrl, {
         method: "POST",
         headers: { "Ocp-Apim-Subscription-Key": speechKey },
+        signal: AbortSignal.timeout(15_000),
       }),
       fetch(relayUrl, {
         headers: { "Ocp-Apim-Subscription-Key": speechKey },
+        signal: AbortSignal.timeout(15_000),
       }),
     ]);
 

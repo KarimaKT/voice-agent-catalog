@@ -84,7 +84,11 @@ Use `copilot-studio/order-agent-instructions.txt` as a second scenario example.
 
 ## Add an agent to the catalog
 
-Add one enabled row to the SharePoint catalog:
+Use **Register an agent** on the maker page: paste the Studio agent URL and
+save the single URL field. The metadata flow fills technical fields
+and creates a disabled review draft with installer-selected profile defaults.
+Makers do not need to copy environment IDs
+or schema names manually. A catalog maintainer handles the advanced fields:
 
 | Column | Purpose |
 | --- | --- |
@@ -94,6 +98,7 @@ Add one enabled row to the SharePoint catalog:
 | `SchemaName` | Published agent schema name |
 | `Enabled` | Whether the app displays the agent |
 | `CompletionPhrase` | Exact successful completion sentence |
+| `EndsConversation` | End only on an exact normalized completion match |
 | `WelcomeMessage` | Fallback first message |
 | `Locale` | Agent output, TTS, and avatar locale |
 | `VoiceName` | Azure neural voice name |
@@ -112,15 +117,17 @@ always answer in the configured output language, even when the user types or
 speaks another language.
 
 Audience filtering improves the dropdown experience only. The app backend
-passes a best-effort user email to the maker flow, which can filter direct
-`AllowedUsers` entries and return `canManageCatalog` plus a configuration URL
+passes a verified user identity to the maker flow, and enforces direct
+`AllowedUsers` equality server-side. The flow checks SharePoint permissions and
+returns `canManageCatalog` plus a configuration URL
 for catalog/site administrators. **Copilot Studio sharing and runtime
 authorization remain the final security boundary.**
 
 The current Direct Line/Agents SDK live transport is verified only for the
 standard Copilot Studio harness. GitHub Copilot/Copilot Chat harnesses do not
-currently support this transport. Keep `Harness` optional and do not reject
-unknown values so future transports can be added without a list migration.
+currently support this transport. Unknown values remain visible but disabled,
+so future transports can be added without a list migration or accidental
+invocation.
 
 ## Choose a voice
 

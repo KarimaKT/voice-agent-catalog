@@ -22,3 +22,14 @@ m365agents.*.yml
 /node_modules/typescript
 /appPackage/
 /infra/
+/.azure/
+/tests/
+/scripts/
+/catalog/
+/copilot-studio/
+/docs/
+/Pat Voice POC/
+__azurite*
+__queuestorage__
+PROJECT-LOCAL.md
+*.md

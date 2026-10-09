@@ -22,5 +22,6 @@
   },
   "ts-node": {
     "transpileOnly": true
-  }
+  },
+  "include": ["src/*.ts"]
 }

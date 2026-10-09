@@ -25,8 +25,9 @@ Invoke-RestMethod https://<app>.azurewebsites.net/api/health
 Invoke-RestMethod https://<app>.azurewebsites.net/api/config
 ```
 
-The config response contains public app/catalog defaults only. It must never
-contain the Speech key.
+The config response contains public app/catalog defaults and the
+`api://<client-id>/access_as_user` scope only. It must never contain the Speech
+key.
 
 ## Authentication troubleshooting
 
@@ -50,10 +51,20 @@ Re-run provisioning after updating `aad.manifest.json`.
 
 ### Need admin approval
 
-The generic app requests only `CopilotStudio.Copilots.Invoke`. If tenant policy
-blocks user consent, ask an administrator to consent that delegated permission.
+The generic app requests its own `access_as_user` scope and
+`CopilotStudio.Copilots.Invoke`; it requests no Graph permission. If tenant
+policy blocks user consent, ask an administrator to grant tenant-wide consent
+for these delegated permissions after provisioning the updated app manifest.
 SharePoint catalog access uses the maker-owned flow and does not request Graph
 consent from app users.
+
+### AADSTS65006 or an invalid invocation permission
+
+Resolve **CopilotStudio.Copilots.Invoke** by name from the tenant's Power
+Platform API service principal before declaring the permission. Do not substitute
+a similar maker/admin scope or grant broad permissions. A stale permission GUID
+can make `.default` token acquisition fail even when the agent is published.
+Update only this app's required resource access, then retry user consent.
 
 If user consent is allowed, accept the one-time Copilot Studio permission
 dialog. Choosing **Return to app without granting permission** cancels the
@@ -70,11 +81,12 @@ before starting authentication.
 - Confirm the flow maker's SharePoint connection is healthy.
 - Confirm `CATALOG_FLOW_URL` resolves from Key Vault.
 - If the flow is intentionally not ready, set `CATALOG_FLOW_URL=disabled`,
-  provision again, and use the configured default agent.
+  provision again, and keep production connection unavailable. Do not use a
+  fallback agent to bypass catalog governance.
 - POST the test request in `catalog/power-automate-flow.md`.
 - Confirm required display-name columns exist.
 - Do not assume CSV-imported internal field names; the app resolves columns by
-  display name.
+  display name in the flow field map.
 - Confirm environment IDs are GUIDs and schema names are published schema names.
 
 ## Speech troubleshooting
@@ -99,8 +111,17 @@ when real-time avatar relay is unavailable.
   generated manifest, not only the template.
 - ZIP deployment is slow: wait for the active deployment; do not start
   overlapping deployments.
+- Windows dependency restore reports `EBUSY`: do not kill unrelated VS Code or
+  system processes. Run `scripts\stage-release.ps1` and deploy its isolated,
+  ignored directory through the same lifecycle. This performs a clean locked
+  restore without deleting the active workspace's dependencies.
 
 ## Cost and cleanup
+
+Use [the release checklist](release-validation.md) before catalog submission.
+Automatic URL/body/console tracing is disabled by default; aggregate metrics
+are retained in Log Analytics for 30 days. Assign an operational and privacy
+owner before wider rollout.
 
 App Service B1 is the predictable fixed charge. Speech/avatar and telemetry are
 usage-based. Use a dedicated resource group and budget alerts.

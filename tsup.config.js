@@ -4,13 +4,14 @@
 module.exports = {
   dts: true,
   minify: false,
-  bundle: false,
+  bundle: true,
   sourcemap: true,
   treeshake: true,
-  splitting: true,
+  splitting: false,
   clean: true,
   outDir: "dist",
   format: ["cjs", "esm"],
   entry: ["src/index.ts"],
+  target: "node22",
   tsconfig: "tsconfig.node.json",
 };

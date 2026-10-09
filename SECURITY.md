@@ -1,6 +1,7 @@
 # Security
 
-This repository is a proof-of-concept sample, not a production service.
+This repository is a reference sample and still requires customer security
+review before production use.
 
 ## Reporting
 
@@ -19,8 +20,14 @@ reproduction details that expose a deployed environment.
 - Speech keys, access tokens, refresh tokens, or MFA material; or
 - conversation transcripts and generated handoff content.
 
-## Production hardening
+## API authorization
 
-Before production, add backend authentication to the Speech token route,
-distributed rate limiting, formal data retention, security monitoring, privacy
-review, accessibility testing, threat modeling, and penetration testing.
+`/api/catalog` and `/api/speech/token` require the app's delegated
+`access_as_user` bearer token. The server validates Entra signature, issuer,
+tenant, audience, expiry, and scope. `/api/health` and `/api/config` are public
+and return no secrets. Catalog authorization uses only verified claims; client
+headers are not identity evidence.
+
+Before production, add distributed rate limiting, formal data retention,
+security monitoring, privacy review, accessibility testing, threat modeling,
+and penetration testing.
