@@ -101,9 +101,13 @@ Generated IDs are preserved on reruns.
 `src/auth.ts` owns token verification, `src/catalog-policy.ts` owns server-side
 row validation/visibility, and the React client consumes only sanitized rows.
 The flow is a connector boundary, not an alternative source of caller identity.
-The UI sends voice-interface context at the start of every real conversation;
-this requests output-language/style adaptation but cannot override agent rules.
-Silent startup uses the SDK's typed start response: its conversation ID may be
+The SDK emits the native conversation-start event; the UI uses returned
+activities or a catalog welcome fallback. Voice-interface context is prepended
+once to the first real typed/spoken user text, with the current input language
+and catalog output locale. There is no separate setup user turn. Structured card
+submissions are preserved and do not consume the first-text prefix. The context
+requests presentation adaptation, not an override of agent policy or permissions.
+Startup uses the SDK's typed start response: its conversation ID may be
 returned in response metadata even when no start activities are emitted. The
 subsequent interface message and user turns use that ID and remain streamed.
 

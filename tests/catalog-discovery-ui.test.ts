@@ -43,6 +43,7 @@ test("one-action voice start connects only after discovery and resumes existing 
   assert.match(body, /setVoiceConversation\(true\);\s*if \(!agentClientRef\.current\) \{\s*await connect\(\);\s*return;\s*\}\s*await speechRef\.current\?\.setConversationActive\(!configRef\.current\?\.demoMode\);\s*await startListening\(true\)/);
   assert.match(source, /onClick=\{\(\) => void startVoiceConversation\(\)\}\s*disabled=\{!catalogLoaded \|\| !selectedHarness\.supported \|\| busy \|\| state === "complete"\}/);
   assert.match(source, /const connected = Boolean\(agentClientRef\.current\)/);
+  assert.ok(body.indexOf("await ensureMicrophonePermission()") < body.indexOf("await connect()"));
 });
 
 test("paid modes are opt-in and the cost notices precede conversation controls", () => {

@@ -59,3 +59,15 @@ test("public config exposes operator-editable cost notices with explicit default
   assert.match(host, /\$1\/hour[\s\S]*?\$15\/million characters/);
   assert.match(host, /\$0\.50\/min while connected, including silence/);
 });
+
+test("conversation startup uses native greetings and sends no separate voice setup turn", () => {
+  const transport = fs.readFileSync("src/Tab/copilot.ts", "utf8");
+  const connect = transport.slice(
+    transport.indexOf("  async connect(): Promise<AgentTurn> {"),
+    transport.indexOf("  async send(input: string | AgentAction, inputLocale"),
+  );
+  assert.match(connect, /emitStartConversationEvent: true/);
+  assert.match(connect, /this\.voiceContextSent = false/);
+  assert.doesNotMatch(connect, /this\.send\(|voiceInterfaceInstructions\(/);
+  assert.match(connect, /return start;/);
+});

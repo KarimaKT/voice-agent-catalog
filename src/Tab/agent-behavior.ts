@@ -29,12 +29,12 @@ export function completesConversation(
       normalizeCompletionText(agent.completionPhrase);
 }
 
-export function voiceInterfaceInstructions(locale: string): string {
-  return `Interface context: this conversation uses speech and may show an avatar. ` +
-    `For the rest of this conversation, answer in ${locale}, even when the user uses another language. ` +
-    `Keep spoken replies concise and natural. Avoid Markdown, decorative symbols, and reading out URLs or file contents. ` +
-    `Show cards, citations, images, and files in chat instead of narrating them. ` +
+export function voiceInterfaceInstructions(locale: string, inputLocale = locale): string {
+  return `Remember the following across this conversation: This conversation is happening over a voice channel. ` +
+    `Keep all conversational responses short and natural, with no markup or decorative symbols. ` +
+    `The user will be speaking ${inputLocale}, but you must always answer in ${locale}. ` +
+    `Keep cards, citations, files and HTML tool payloads in their structured outputs; do not read them aloud. ` +
     `Follow your existing instructions and authorization rules. ` +
-    `This is interface setup, not a request to execute a tool or complete a business task. ` +
-    `Briefly introduce yourself and invite the user's first request.`;
+    `This interface context is not a request to execute a tool. ` +
+    `Here is the user's response to your request:\n\n`;
 }

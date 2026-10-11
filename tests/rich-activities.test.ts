@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Activity, ActivityTypes } from "@microsoft/agents-activity";
+import { CopilotStudioClient, type StartRequest } from "@microsoft/agents-copilotstudio-client";
 
 import {
   collectAgentTurn,
@@ -153,9 +154,70 @@ test("Copilot transport sends card submissions through existing streaming conver
   Object.assign(client, { client: transport, conversationId: "continuous-1" });
   await client.send({ title: "Save", kind: "submit", value: { customer: "Contoso" } });
   await client.send("What next?");
+  await client.send("Please explain", "fr-FR");
   assert.deepEqual(outgoing[0].value, { customer: "Contoso" });
-  assert.equal(outgoing[1].text, "What next?");
+  assert.match(outgoing[1].text!, /always answer in de-DE/);
+  assert.ok(outgoing[1].text!.endsWith("What next?"));
+  assert.equal(outgoing[2].text, "Please explain");
   assert.equal(outgoing[0].conversation?.id, outgoing[1].conversation?.id);
+});
+
+test("voice context prefixes the first text answer once, preserving its content and selected input language", async () => {
+  const definition = {
+    displayName: "Agent", environmentId: "environment-1", schemaName: "agent",
+    harness: "Standard", locale: "en-US",
+  } as AgentDefinition;
+  const client = new CopilotAgentClient({} as MicrosoftIdentity, definition);
+  const outgoing: Activity[] = [];
+  Object.assign(client, {
+    conversationId: "voice-1",
+    client: {
+      sendActivityStreaming(value: Activity, id: string) {
+        outgoing.push(value);
+        return replies(activity({ type: "message", text: "Next question", conversation: { id } }));
+      },
+    },
+  });
+
+  test("native startup emits the greeting without a setup send and resets the first-text prefix on reconnect", async (t) => {
+    const starts: StartRequest[] = [];
+    const sent: Activity[] = [];
+    t.mock.method(CopilotStudioClient.prototype, "startConversationWithResponse", async (request: StartRequest) => {
+      starts.push(request);
+      const id = `native-${starts.length}`;
+      return {
+        conversationId: id,
+        activities: [activity({ type: "message", text: "Native greeting", conversation: { id } })],
+      };
+    });
+    t.mock.method(CopilotStudioClient.prototype, "sendActivityStreaming", (value: Activity, id: string) => {
+      sent.push(value);
+      return replies(activity({ type: "message", text: "Reply", conversation: { id } }));
+    });
+    const agent = {
+      displayName: "Agent", environmentId: "11111111-1111-1111-1111-111111111111",
+      schemaName: "new_Agent", harness: "standard", locale: "en-US",
+    } as AgentDefinition;
+    const identity = { acquireToken: async () => "test-token" } as MicrosoftIdentity;
+    const client = new CopilotAgentClient(identity, agent);
+    for (const inputLanguage of ["es-ES", "fr-FR"]) {
+      const turn = await client.connect();
+      assert.equal(turn.messages[0].text, "Native greeting");
+      assert.equal(sent.length, starts.length - 1, "Startup sends no hidden user message");
+      await client.send("My answer", inputLanguage);
+      assert.match(sent.at(-1)!.text!, new RegExp(`user will be speaking ${inputLanguage}`));
+    }
+    assert.ok(starts.every((request) => request.emitStartConversationEvent));
+    assert.equal(sent.length, 2);
+  });
+  const answer = "Me llamo Sofia.\nThis answer must stay intact.";
+  await client.send(answer, "es-ES");
+  await client.send("Second answer", "fr-FR");
+  assert.match(outgoing[0].text!, /user will be speaking es-ES/);
+  assert.match(outgoing[0].text!, /always answer in en-US/);
+  assert.ok(outgoing[0].text!.endsWith(answer));
+  assert.equal(outgoing[0].locale, "en-US");
+  assert.equal(outgoing[1].text, "Second answer");
 });
 
 test("speech text never derives content from attachments", () => {

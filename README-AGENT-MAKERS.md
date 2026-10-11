@@ -1,5 +1,12 @@
 # Publish an agent to Voice Agent Catalog
 
+Build your agent for normal chat. The catalog prepends a short voice-channel
+instruction to the user's first typed/spoken text message, naming the selected
+input language and catalog output `Locale`; later messages are unchanged.
+You do not need separate voice-specific agent instructions. This presentation
+hint cannot override agent policy, permissions, fixed messages or unsupported
+transports. See [the voice-adaptation formula](docs/maker/README.md#build-for-chat-the-catalog-adapts-the-voice-channel).
+
 1. Build and test a Copilot Studio agent with Microsoft authentication.
 2. Choose an output `Locale`. The shell requests concise, voice-friendly replies
    in that language automatically; agent-authored rules and cards still apply.
@@ -27,6 +34,8 @@ harness values are preserved but labelled unavailable in the picker.
 See [the full maker guide](docs/maker/README.md) and
 [catalog setup](catalog/README.md). This repository intentionally contains no
 tenant-specific list URL, IDs, or user addresses.
+The guide includes exact advanced-field values, supported real-time avatar/style
+pairs, and [the full dated voice-name CSV](docs/maker/speech-voices.csv).
 
 The installer must configure the URL-registration flow and an authorized
 metadata connection for the target environment. Other environments are not

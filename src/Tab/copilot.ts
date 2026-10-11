@@ -53,7 +53,7 @@ export interface AgentMessage {
 
 export interface AgentClient {
   connect(): Promise<AgentTurn>;
-  send(input: string | AgentAction): Promise<AgentTurn>;
+  send(input: string | AgentAction, inputLocale?: string): Promise<AgentTurn>;
 }
 
 export function createMessageActivity(
@@ -248,6 +248,7 @@ export class CopilotAgentClient {
   private readonly settings: ConnectionSettings;
   private client?: CopilotStudioClient;
   private conversationId = "";
+  private voiceContextSent = false;
 
   constructor(
     private readonly identity: MicrosoftIdentity,
@@ -265,28 +266,31 @@ export class CopilotAgentClient {
     ]);
     this.client = new CopilotStudioClient(this.settings, token);
     const startRequest: StartRequest = {
-      emitStartConversationEvent: false,
+      emitStartConversationEvent: true,
       locale: this.agent.locale,
     };
     const response = await this.client.startConversationWithResponse(startRequest);
     const start = await collectAgentTurn(response.activities, response.conversationId);
     this.conversationId = start.conversationId;
+    this.voiceContextSent = false;
 
     if (!this.conversationId) {
       throw new Error(`${this.agent.displayName} did not return a conversation ID.`);
     }
 
-    if (start.completed) return start;
-    const setup = await this.send(voiceInterfaceInstructions(this.agent.locale));
-    return { ...setup, messages: [...start.messages, ...setup.messages] };
+    return start;
   }
 
-  async send(input: string | AgentAction): Promise<AgentTurn> {
+  async send(input: string | AgentAction, inputLocale = this.agent.locale): Promise<AgentTurn> {
     if (!this.client || !this.conversationId) {
       throw new Error(`Connect to ${this.agent.displayName} before sending a message.`);
     }
 
     const activity = createMessageActivity(input, this.conversationId, this.agent.locale);
+    if (!this.voiceContextSent && activity.text) {
+      activity.text = voiceInterfaceInstructions(this.agent.locale, inputLocale) + activity.text;
+      this.voiceContextSent = true;
+    }
     const turn = await collectAgentTurn(
       this.client.sendActivityStreaming(activity, this.conversationId),
       this.conversationId,

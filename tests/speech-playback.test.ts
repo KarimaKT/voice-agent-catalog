@@ -62,6 +62,8 @@ function speechHarness() {
   let playError: Error | undefined;
   let credentialsGate: Promise<void> | undefined;
   let credentialRequests = 0;
+  let microphonePermission: string = "granted";
+  let permissionQueryError: Error | undefined;
   class Player {
     paused = false;
     onended?: () => void;
@@ -86,6 +88,15 @@ function speechHarness() {
     .replace(/^export /gm, "");
   const Controller = runInNewContext(`${script}\nSpeechController;`, {
     Error, Blob, Audio: Player, MediaStream: Stream, RTCPeerConnection: Peer,
+    navigator: {
+      permissions: {
+        query: async () => {
+          if (permissionQueryError) throw permissionQueryError;
+          return { state: microphonePermission };
+        },
+      },
+    },
+    console: { info: () => {} },
     setTimeout: (callback: () => void, delay: number) => {
       const id = ++nextTimer;
       timers.set(id, { callback: () => { timers.delete(id); callback(); }, delay });
@@ -141,6 +152,9 @@ function speechHarness() {
       assert.equal(avatars[0].spoken, turn);
     },
     failPlayback: () => { playError = new Error("Autoplay denied"); },
+    denyMicrophone: () => { microphonePermission = "denied"; },
+    failPermissionQuery: (error: Error) => { permissionQueryError = error; },
+    credentialRequestCount: () => credentialRequests,
     result: { reason: 1, audioData: new ArrayBuffer(16) },
     delayCredentials: () => {
       let release!: () => void;
@@ -175,6 +189,32 @@ test("audio-only speech waits for native playback end rather than synthesis comp
   await speech;
   assert.equal(finished, true);
   assert.deepEqual(harness.revoked, ["blob:test-audio"]);
+});
+
+test("denied microphone permission gives site/Windows guidance before Speech credentials are requested", async () => {
+  const harness = speechHarness();
+  harness.denyMicrophone();
+  await assert.rejects(
+    harness.controller.startListening(() => {}, () => {}, () => {}),
+    /Microphone access is blocked.*address-bar.*Windows/,
+  );
+  assert.equal(harness.credentialRequestCount(), 0);
+});
+
+test("unsupported permission query retains browser prompt behavior but other errors surface", async () => {
+  const supportedFallback = speechHarness();
+  supportedFallback.failPermissionQuery(new TypeError("Unsupported permission"));
+  const release = supportedFallback.delayCredentials();
+  const listening = supportedFallback.controller.startListening(() => {}, () => {}, () => {});
+  await supportedFallback.credentialsRequested();
+  await supportedFallback.controller.stopListening();
+  release();
+  await listening;
+
+  const failed = speechHarness();
+  failed.failPermissionQuery(new Error("Permission service failed"));
+  await assert.rejects(failed.controller.startListening(() => {}, () => {}, () => {}), /Permission service failed/);
+  assert.equal(failed.credentialRequestCount(), 0);
 });
 
 test("avatar cannot start without an active Copilot Studio session", async () => {

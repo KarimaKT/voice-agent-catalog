@@ -11,7 +11,7 @@ import {
   type AgentMessage,
   type TeamsIdentityContext,
 } from "./copilot";
-import { SpeechController } from "./speech";
+import { ensureMicrophonePermission, SpeechController } from "./speech";
 import { completesConversation, getHarnessSupport } from "./agent-behavior";
 import { AdaptiveCard } from "./AdaptiveCard";
 import { safeHttpUrl } from "./adaptive-card-policy";
@@ -418,7 +418,7 @@ export default function App() {
       setMessages((current) => [...current, createMessage("user", text)]);
       setState("thinking");
       setStatus(`${selectedAgent?.displayName || "The agent"} is thinking...`);
-      const turn = await client.send(typeof input === "string" ? text : input);
+      const turn = await client.send(typeof input === "string" ? text : input, inputLanguage);
       if (client !== agentClientRef.current) return;
       if (turn.messages.length === 0 && !turn.completed) {
         throw new Error(`${selectedAgent?.displayName || "The agent"} returned no message.`);
@@ -541,6 +541,12 @@ export default function App() {
   async function startVoiceConversation(): Promise<void> {
     if (!catalogLoaded) {
       await loadCatalog();
+      return;
+    }
+    try {
+      await ensureMicrophonePermission();
+    } catch (error) {
+      handleError(error, "Microphone access could not be checked.");
       return;
     }
     setVoiceConversation(true);

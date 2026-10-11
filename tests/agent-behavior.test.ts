@@ -17,10 +17,13 @@ test("completion requires EndsConversation and exact normalized equality", () =>
 });
 
 test("voice context honors the output locale and preserves agent authorization", () => {
-  const instruction = voiceInterfaceInstructions("fr-FR");
+  const instruction = voiceInterfaceInstructions("fr-FR", "es-ES");
   assert.match(instruction, /answer in fr-FR/);
   assert.match(instruction, /existing instructions and authorization rules/);
   assert.match(instruction, /not a request to execute a tool/);
+  assert.match(instruction, /user will be speaking es-ES/);
+  assert.match(instruction, /short and natural, with no markup/);
+  assert.ok(instruction.endsWith("Here is the user's response to your request:\n\n"));
 });
 
 test("only Standard harness transport is supported", () => {

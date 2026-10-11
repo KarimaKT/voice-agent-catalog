@@ -2,6 +2,26 @@ import * as SpeechSDK from "microsoft-cognitiveservices-speech-sdk";
 
 import type { AgentDefinition, AvatarIdleTimeoutSeconds, SpeechCredentials } from "./types";
 
+export async function ensureMicrophonePermission(): Promise<void> {
+  if (typeof navigator === "undefined" || !navigator.permissions) return;
+  let permission: PermissionStatus;
+  try {
+    permission = await navigator.permissions.query({ name: "microphone" as PermissionName });
+  } catch (error) {
+    if (error && typeof error === "object" && "name" in error &&
+        (error.name === "TypeError" || error.name === "NotSupportedError")) {
+      console.info("This browser cannot query microphone permission; it will request access when listening starts.");
+      return;
+    }
+    throw error;
+  }
+  if (permission.state === "denied") {
+    throw new Error(
+      "Microphone access is blocked. In Edge or Chrome, open this site's address-bar permissions, set Microphone to Allow, then reload. In Windows, also check Privacy & security > Microphone and permission for desktop apps. Organization-managed restrictions require your administrator.",
+    );
+  }
+}
+
 async function getCredentials(accessToken: string): Promise<SpeechCredentials> {
   const response = await fetch("/api/speech/token", {
     method: "POST",
@@ -133,6 +153,8 @@ export class SpeechController {
     await this.stopSpeaking();
     if (generation !== this.listeningGeneration) return;
     await this.closeRecognizer();
+    await ensureMicrophonePermission();
+    if (generation !== this.listeningGeneration) return;
     const credentials = await getCredentials(await this.getApiAccessToken());
     if (generation !== this.listeningGeneration) return;
     const speechConfig = createSpeechConfig(
