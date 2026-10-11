@@ -60,6 +60,28 @@ Assert one avatar startup/peer is reused across replies, verify each 15/34/45
 second idle setting, and prove agent processing and playback suspend idle cleanup.
 Idle expiry must retain the agent conversation and allow a later video reconnect.
 
+## Chat-first adaptation and maker publishing
+
+- Start the published agent normally. Confirm native greeting activities and
+  the fallback welcome path without a separate setup user turn.
+- Verify the voice context prefixes only the first typed/spoken text, preserves
+  the original answer, and names the selected input locale plus output `Locale`.
+- Keep object-valued card submissions unchanged; they must not become text or
+  consume the first-text prefix. Reconnection resets the prefix exactly once.
+- Mock transport tests must be independently registered, have bounded deadlines,
+  and deny network access. Do not start billable agents to verify prompt assembly.
+- Check blocked-microphone guidance before agent startup and Speech credentials.
+  A permission check is not proof of real headset recognition.
+- Verify documented voice identifiers against the regional voice metadata API,
+  separate real-time avatar pairs from unsupported/batch-only options, and date
+  the reference. Metadata lookup is not a paid synthesis test.
+- Publish the maker page with the owner's authenticated SharePoint session,
+  current ETag and request digest. Preserve registration and list web parts.
+  Read back the saved control and reload the page to verify rendered headings,
+  tables, formula and reference links. Never claim publication from a local file.
+- Record source commit, deployed bundle, CI outcome and live page evidence
+  privately. Any pending validation is an open gate, not release success.
+
 ## Privacy defaults
 
 Azure Monitor automatic HTTP/dependency, console and browser tracing is
